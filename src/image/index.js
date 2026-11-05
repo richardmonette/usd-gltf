@@ -38,6 +38,34 @@ export function imageMimeType( bytes ) {
 }
 
 /**
+ * Whether a PNG or JPEG stores a single grey channel, from its header.
+ * @param {Uint8Array} bytes
+ */
+export function isGreyscaleImage( bytes ) {
+
+	bytes = toBytes( bytes );
+	const type = imageMimeType( bytes );
+	if ( type === 'image/png' ) return bytes[ 25 ] === 0 || bytes[ 25 ] === 4; // IHDR colour type
+
+	if ( type === 'image/jpeg' ) {
+
+		// walk the markers to the frame header, whose component count follows the dimensions
+		for ( let o = 2; o + 9 < bytes.length; ) {
+
+			if ( bytes[ o ] !== 0xFF ) return false;
+			const marker = bytes[ o + 1 ];
+			if ( marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC ) return bytes[ o + 9 ] === 1;
+			o += 2 + ( ( bytes[ o + 2 ] << 8 ) | bytes[ o + 3 ] );
+
+		}
+
+	}
+
+	return false;
+
+}
+
+/**
  * Decodes a PNG, JPEG or WebP. The format is sniffed from the bytes; mimeType is only a fallback.
  * @param {Uint8Array|ArrayBuffer} bytes
  * @param {string} [mimeType]
@@ -56,6 +84,55 @@ export function decodeImage( bytes, mimeType ) {
 }
 
 const hasNativeDecoder = typeof createImageBitmap === 'function' && typeof OffscreenCanvas === 'function';
+
+/**
+ * Encodes a PNG, with the platform's encoder where there is one (much faster) unless the image has
+ * partial transparency, which canvases store premultiplied.
+ * @param {{ width: number, height: number, channels: number, data: Uint8Array }} image 8 bit
+ * @returns {Promise<Uint8Array>}
+ */
+export async function encodePNGAsync( image ) {
+
+	const { width, height, channels, data } = image;
+	let opaque = channels !== 2 && channels !== 4;
+	if ( ! opaque ) {
+
+		opaque = true;
+		for ( let i = channels - 1; i < data.length; i += channels ) if ( data[ i ] !== 255 ) { opaque = false; break; }
+
+	}
+
+	if ( hasNativeDecoder && opaque && ( image.bitDepth ?? 8 ) === 8 ) {
+
+		try {
+
+			const rgba = new Uint8ClampedArray( width * height * 4 );
+			for ( let i = 0, n = width * height; i < n; i ++ ) {
+
+				const s = i * channels;
+				rgba[ i * 4 ] = data[ s ];
+				rgba[ i * 4 + 1 ] = data[ channels >= 3 ? s + 1 : s ];
+				rgba[ i * 4 + 2 ] = data[ channels >= 3 ? s + 2 : s ];
+				rgba[ i * 4 + 3 ] = 255;
+
+			}
+
+			const canvas = new OffscreenCanvas( width, height );
+			canvas.getContext( '2d' ).putImageData( new ImageData( rgba, width, height ), 0, 0 );
+			const blob = await canvas.convertToBlob( { type: 'image/png' } );
+			return new Uint8Array( await blob.arrayBuffer() );
+
+		} catch {
+
+			// fall through to the JavaScript encoder
+
+		}
+
+	}
+
+	return encodePNG( image );
+
+}
 
 /**
  * Decodes with the platform's image decoder where there is one (browsers and workers), which is

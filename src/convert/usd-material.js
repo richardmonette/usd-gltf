@@ -6,7 +6,7 @@
 // and lets textures be referenced directly when glTF can express the result, or be repacked
 // (baked) into a new image when it can't, e.g. separate roughness and metallic maps.
 
-import { decodeImageAsync, encodePNG, imageMimeType } from '../image/index.js';
+import { decodeImageAsync, encodePNG, encodePNGAsync, imageMimeType, isGreyscaleImage } from '../image/index.js';
 import { multiply } from '../util/math.js';
 import { resolveAssetPath } from '../usd/stage.js';
 
@@ -476,6 +476,20 @@ export class MaterialConverter {
 
 	}
 
+	async isGrey( file ) {
+
+		try {
+
+			return isGreyscaleImage( await this.stage.readAsset( file ) );
+
+		} catch {
+
+			return false;
+
+		}
+
+	}
+
 	decode( file ) {
 
 		if ( ! this.decoded.has( file ) ) {
@@ -562,8 +576,10 @@ export class MaterialConverter {
 		const tex = textured[ 0 ].term.tex;
 		const sameTexture = textured.every( ( s ) => s.term.tex.file === tex.file && s.term.tex.uv.name === tex.uv.name && JSON.stringify( s.term.tex.uv.transform ) === JSON.stringify( tex.uv.transform ) );
 
-		// direct use: each textured slot reads its own channel, no bias, scale expressible as a factor
-		const direct = sameTexture && textured.every( ( s ) => s.term.channel === s.out && Math.abs( s.term.bias ) < 1e-6 && ( allowFactor || Math.abs( s.term.scale - 1 ) < 1e-6 ) ) &&
+		// direct use: each textured slot reads its own channel (any colour channel of a grey image
+		// reads the same value), no bias, and a scale expressible as a factor
+		const grey = sameTexture && textured.some( ( s ) => s.term.channel !== s.out ) && await this.isGrey( tex.file );
+		const direct = sameTexture && textured.every( ( s ) => ( s.term.channel === s.out || ( grey && s.term.channel < 3 && s.out < 3 ) ) && Math.abs( s.term.bias ) < 1e-6 && ( allowFactor || Math.abs( s.term.scale - 1 ) < 1e-6 ) ) &&
 			slots.every( ( s ) => ! s || s.term.tex || s.ignoreConst || ( allowFactor && s.constOk ) );
 
 		if ( direct ) {
@@ -588,47 +604,64 @@ export class MaterialConverter {
 
 		}
 
+		const key = 'baked:' + slots.map( ( s ) => s ? `${ s.term.tex?.file }#${ s.term.channel }*${ s.term.scale }+${ s.term.bias }` : '-' ).join( ',' );
+		let imageIndex = this.images.get( key )?.index;
+
+		if ( imageIndex === undefined ) {
+
+			const image = this.bake( slots, textured, sources );
+			imageIndex = this.builder.addImage( await encodePNGAsync( image ), 'image/png', imageName( tex.file ) + '_packed' );
+			this.images.set( key, { index: imageIndex, mimeType: 'image/png' } );
+
+		}
+
+		return { info: this.textureInfo( imageIndex, tex, key ), factors: slots.map( () => 1 ) };
+
+	}
+
+	// Writes each slot's term into its output channel, resampling sources to the largest size.
+	// Only the channels glTF reads are stored: grey for a lone R, RGB, or RGBA when alpha is used.
+	bake( slots, textured, sources ) {
+
 		const width = Math.max( ...sources.map( ( s ) => s.width ) );
 		const height = Math.max( ...sources.map( ( s ) => s.height ) );
-		const out = new Uint8Array( width * height * 4 );
+		const used = slots.map( ( s, c ) => ( s ? c : - 1 ) ).filter( ( c ) => c >= 0 );
+		const channels = used.length === 1 && used[ 0 ] === 0 ? 1 : used.includes( 3 ) ? 4 : 3;
+		const out = new Uint8Array( width * height * channels );
 		const srcOf = new Map( textured.map( ( s, i ) => [ s, sources[ i ] ] ) );
 
-		for ( let c = 0; c < 4; c ++ ) {
+		for ( let c = 0; c < channels; c ++ ) {
 
 			const slot = slots.find( ( s ) => s && s.out === c );
 
-			if ( ! slot ) {
+			if ( ! slot || ! slot.term.tex ) {
 
-				for ( let i = c; i < out.length; i += 4 ) out[ i ] = 255;
+				const v = slot ? Math.round( clamp01( slot.term.bias ) * 255 ) : 255;
+				for ( let i = c; i < out.length; i += channels ) out[ i ] = v;
 				continue;
 
 			}
 
 			const { term } = slot;
-
-			if ( ! term.tex ) {
-
-				const v = Math.round( clamp01( term.bias ) * 255 );
-				for ( let i = c; i < out.length; i += 4 ) out[ i ] = v;
-				continue;
-
-			}
-
 			const src = srcOf.get( slot );
 			const max = src.bitDepth === 16 ? 65535 : 255;
-			const sc = Math.min( term.channel, src.channels - 1 );
 			const alphaMissing = term.channel === 3 && src.channels < 4 && src.channels !== 2;
-			const channel = src.channels === 2 && term.channel === 3 ? 1 : src.channels <= 2 && term.channel < 3 ? 0 : sc;
+			const channel = src.channels === 2 && term.channel === 3 ? 1 : src.channels <= 2 && term.channel < 3 ? 0 : Math.min( term.channel, src.channels - 1 );
 
-			for ( let y = 0; y < height; y ++ ) {
+			// output = clamp( raw / max * scale + bias ) * 255, as one multiply and add per pixel
+			const k = term.scale * 255 / max, b = term.bias * 255 + 0.5;
+			const xs = new Int32Array( width );
+			for ( let x = 0; x < width; x ++ ) xs[ x ] = Math.min( src.width - 1, Math.floor( x * src.width / width ) ) * src.channels + channel;
+			const data = src.data, sw = src.width * src.channels;
 
-				const sy = Math.min( src.height - 1, Math.floor( y * src.height / height ) );
+			for ( let y = 0, o = c; y < height; y ++ ) {
 
-				for ( let x = 0; x < width; x ++ ) {
+				const row = Math.min( src.height - 1, Math.floor( y * src.height / height ) ) * sw;
 
-					const sx = Math.min( src.width - 1, Math.floor( x * src.width / width ) );
-					const raw = alphaMissing ? 1 : src.data[ ( sy * src.width + sx ) * src.channels + channel ] / max;
-					out[ ( y * width + x ) * 4 + c ] = Math.round( clamp01( raw * term.scale + term.bias ) * 255 );
+				for ( let x = 0; x < width; x ++, o += channels ) {
+
+					const v = alphaMissing ? 255 * term.scale + b : data[ row + xs[ x ] ] * k + b;
+					out[ o ] = v <= 0 ? 0 : v >= 255 ? 255 : v | 0;
 
 				}
 
@@ -636,16 +669,7 @@ export class MaterialConverter {
 
 		}
 
-		const key = 'baked:' + slots.map( ( s ) => s ? `${ s.term.tex?.file }#${ s.term.channel }*${ s.term.scale }+${ s.term.bias }` : '-' ).join( ',' );
-		let imageIndex = this.images.get( key )?.index;
-		if ( imageIndex === undefined ) {
-
-			imageIndex = this.builder.addImage( encodePNG( { width, height, channels: 4, data: out } ), 'image/png', imageName( tex.file ) + '_packed' );
-			this.images.set( key, { index: imageIndex, mimeType: 'image/png' } );
-
-		}
-
-		return { info: this.textureInfo( imageIndex, tex, key ), factors: slots.map( () => 1 ) };
+		return { width, height, channels, data: out };
 
 	}
 
