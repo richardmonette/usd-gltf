@@ -48,9 +48,14 @@ Current status:
 
 The acceptance corpora are every model in [Apple's AR Quick Look gallery](https://developer.apple.com/augmented-reality/quick-look/) and every model in the [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets). Conversions are checked against Pixar's OpenUSD (`usd-core`) and the Khronos glTF Validator: per mesh triangle counts and world space bounds at several animation times, with skinning baked by OpenUSD, must match.
 
+To run it locally (needs Python with `pip install usd-core`, in a `.venv` here or on `PATH`):
+
 ```
-node scripts/fetch-corpus.js
+npm run fetch-corpus
+npm run conformance
 ```
+
+The [Conformance workflow](.github/workflows/conformance.yml) runs the same check in CI.
 
 ## License
 

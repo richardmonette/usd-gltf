@@ -1,0 +1,38 @@
+name: Conformance
+
+# Converts every Apple AR Quick Look gallery model and every Khronos glTF sample model and checks the
+# results against OpenUSD (usd-core) and the Khronos glTF Validator. See scripts/conformance.js.
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'src/**', 'scripts/conformance.js', 'test/oracle/**', '.github/workflows/conformance.yml' ]
+  pull_request:
+    paths: [ 'src/**', 'scripts/conformance.js', 'test/oracle/**' ]
+  workflow_dispatch:
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: pip install usd-core
+      - uses: actions/cache@v4
+        with:
+          path: corpus
+          key: corpus-v1
+      - run: npm run fetch-corpus
+      - run: npm run conformance
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: conformance-report
+          path: out/conformance/report.json

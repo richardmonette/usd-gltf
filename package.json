@@ -16,7 +16,9 @@
     "bin"
   ],
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "conformance": "node scripts/conformance.js",
+    "fetch-corpus": "node scripts/fetch-corpus.js"
   },
   "engines": {
     "node": ">=18"
