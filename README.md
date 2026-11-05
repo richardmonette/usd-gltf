@@ -41,6 +41,11 @@ glTF to USD writes `UsdPreviewSurface` materials, UsdSkel skins and blend shapes
 
 ## Conformance
 
+Current status:
+
+- All 18 USD files in Apple's AR Quick Look gallery convert to GLB. Per mesh triangle counts and world space bounds at the start, middle and end of each animation match OpenUSD with skinning baked, and the Khronos glTF Validator reports no errors. (The gallery's three `.reality` files are RealityKit's format, not USD.)
+- All 150 Khronos glTF sample models convert to USDZ that OpenUSD's validators accept with no errors or warnings, with geometry matching the source at several animation times, and convert back to glTF with identical materials, material variants and animations.
+
 The acceptance corpora are every model in [Apple's AR Quick Look gallery](https://developer.apple.com/augmented-reality/quick-look/) and every model in the [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets). Conversions are checked against Pixar's OpenUSD (`usd-core`) and the Khronos glTF Validator: per mesh triangle counts and world space bounds at several animation times, with skinning baked by OpenUSD, must match.
 
 ```

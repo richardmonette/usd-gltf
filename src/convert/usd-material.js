@@ -699,6 +699,14 @@ export class MaterialConverter {
 
 		for ( const [ key, value ] of Object.entries( stash ) ) {
 
+			if ( key === 'normalTexture' ) {
+
+				const info = await this.restoreTextures( value, anchor );
+				if ( info ) m.normalTexture = info;
+				continue;
+
+			}
+
 			if ( key === 'name' || key === 'doubleSided' || key === 'extras' || key === 'alphaMode' || key === 'alphaCutoff' ) continue;
 			m.extensions = { ...m.extensions, [ key ]: await this.restoreTextures( value, anchor ) };
 			this.builder.useExtension( key );

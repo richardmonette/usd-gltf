@@ -106,13 +106,14 @@ class Builder {
 
 export class GLTFToUSD {
 
-	constructor( doc, { log = () => {}, textureDir = 'textures', debug = false, imageDecoder = null } = {} ) {
+	constructor( doc, { log = () => {}, textureDir = 'textures', debug = false, imageDecoder = null, bakeNormalScale = true } = {} ) {
 
 		this.doc = doc;
 		this.json = doc.json;
 		this.log = log;
 		this.textureDir = textureDir;
 		this.imageDecoder = imageDecoder;
+		this.bakeNormalScale = bakeNormalScale;
 		this.debug = debug; // returns the node/primitive -> prim path mapping, for verification
 		this.b = new Builder();
 		this.files = []; // { name, data } for the package
@@ -225,6 +226,50 @@ export class GLTFToUSD {
 
 	}
 
+	// A normal map with glTF's normal scale applied: n = normalize( ( tex * 2 - 1 ) * ( s, s, 1 ) ).
+	async bakedNormal( source, s ) {
+
+		const key = source + '/' + s;
+		this.bakedNormals ??= new Map();
+		if ( this.bakedNormals.has( key ) ) return this.bakedNormals.get( key );
+
+		let path = null;
+		const image = this.doc.images[ source ];
+
+		try {
+
+			const img = await decodeImageAsync( image.bytes, image.mimeType, this.imageDecoder );
+			const max = img.bitDepth === 16 ? 65535 : 255;
+			const out = new Uint8Array( img.width * img.height * 3 );
+
+			for ( let i = 0, n = img.width * img.height; i < n; i ++ ) {
+
+				const c = img.channels;
+				const x = ( img.data[ i * c ] / max * 2 - 1 ) * s;
+				const y = ( img.data[ i * c + ( c > 2 ? 1 : 0 ) ] / max * 2 - 1 ) * s;
+				const z = c > 2 ? img.data[ i * c + 2 ] / max * 2 - 1 : 1;
+				const l = Math.hypot( x, y, z ) || 1;
+				out[ i * 3 ] = Math.round( ( x / l + 1 ) * 127.5 );
+				out[ i * 3 + 1 ] = Math.round( ( y / l + 1 ) * 127.5 );
+				out[ i * 3 + 2 ] = Math.round( ( z / l + 1 ) * 127.5 );
+
+			}
+
+			const base = sanitize( image.name || image.uri?.split( '/' ).pop()?.replace( /\.[^.]*$/, '' ), 'normal' ) + '_' + source;
+			path = `${ this.textureDir }/${ base }_scale${ String( s ).replace( /[^0-9]/g, '_' ) }.png`;
+			this.files.push( { name: path, data: encodePNG( { width: img.width, height: img.height, channels: 3, data: out } ) } );
+
+		} catch ( e ) {
+
+			this.log( `normal map ${ source }: ${ e.message }` );
+
+		}
+
+		this.bakedNormals.set( key, path );
+		return path;
+
+	}
+
 	textureSource( textureIndex ) {
 
 		const texture = this.json.textures?.[ textureIndex ];
@@ -312,10 +357,10 @@ export class GLTFToUSD {
 		};
 
 		// A UsdUVTexture for a glTF textureInfo with per channel scale and bias.
-		const texture = async ( info, name, { scale = [ 1, 1, 1, 1 ], bias = [ 0, 0, 0, 0 ], colorSpace = 'raw' } = {} ) => {
+		const texture = async ( info, name, { scale = [ 1, 1, 1, 1 ], bias = [ 0, 0, 0, 0 ], colorSpace = 'raw', file = null } = {} ) => {
 
 			const source = this.textureSource( info.index );
-			const file = source !== undefined ? await this.imagePath( source ) : null;
+			file ??= source !== undefined ? await this.imagePath( source ) : null;
 			if ( ! file ) return null;
 
 			const transform = info.extensions?.KHR_texture_transform;
@@ -426,8 +471,14 @@ export class GLTFToUSD {
 			if ( material.normalTexture ) {
 
 				const s = material.normalTexture.scale ?? 1;
-				const nTex = await texture( material.normalTexture, 'normalTexture', { scale: [ 2 * s, 2 * s, 2, 1 ], bias: [ - s, - s, - 1, 0 ] } );
+				// UsdPreviewSurface requires 8 bit normal maps to use scale 2 and bias -1, so a glTF
+				// normal scale is baked into a new texture; the original is kept for the way back
+				const baked = s !== 1 && this.bakeNormalScale ? await this.bakedNormal( this.textureSource( material.normalTexture.index ), s ) : null;
+				const nTex = baked
+					? await texture( material.normalTexture, 'normalTexture', { scale: [ 2, 2, 2, 1 ], bias: [ - 1, - 1, - 1, 0 ], file: baked } )
+					: await texture( material.normalTexture, 'normalTexture', { scale: [ 2 * s, 2 * s, 2, 1 ], bias: [ - s, - s, - 1, 0 ] } );
 				if ( nTex ) link( 'normal', 'normal3f', nTex, 'rgb' );
+				if ( baked ) inputs.originalNormal = ( await this.stashTextures( { normalTexture: material.normalTexture } ) ).normalTexture;
 
 			}
 
@@ -465,6 +516,7 @@ export class GLTFToUSD {
 		for ( const [ key, value ] of Object.entries( ext ) ) if ( ! MAPPED_MATERIAL_EXTENSIONS.has( key ) ) stash[ key ] = await this.stashTextures( value );
 		if ( ext.KHR_materials_ior ) stash.KHR_materials_ior = ext.KHR_materials_ior;
 		if ( material.extras !== undefined ) stash.extras = material.extras;
+		if ( inputs.originalNormal ) stash.normalTexture = inputs.originalNormal;
 		if ( material.doubleSided ) stash.doubleSided = true;
 		// blending can't be inferred from an opaque opacity
 		if ( alphaMode !== 'OPAQUE' ) { stash.alphaMode = alphaMode; if ( alphaMode === 'MASK' ) stash.alphaCutoff = material.alphaCutoff ?? 0.5; }
