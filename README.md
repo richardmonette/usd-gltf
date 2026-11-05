@@ -2,8 +2,6 @@
 
 Convert between [OpenUSD](https://openusd.org/) and [glTF](https://www.khronos.org/gltf/) in both directions, in pure JavaScript with no dependencies. Runs in Node and the browser, [live demo](https://richardmonette.github.io/usd-gltf/examples/). Reads and writes all three USD encodings: text `.usda`, binary crate `.usdc`, and the `.usdz` package.
 
-> Work in progress, not yet published to npm.
-
 ```
 npm install usd-gltf
 ```

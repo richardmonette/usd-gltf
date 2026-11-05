@@ -1,0 +1,13 @@
+#usda 1.0
+
+def Xform "A" (
+    prepend references = @./other.usda@</B> (offset = 2; customData = {
+        string note = "hello"
+        int count = 3
+    })
+)
+{
+    float y = 2
+    float x = 1
+    reorder properties = ["x", "y"]
+}

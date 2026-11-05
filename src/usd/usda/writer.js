@@ -56,7 +56,7 @@ function formatScalar( v, base ) {
 
 	if ( v === null || v === undefined ) return 'None';
 	if ( base === 'bool' ) return v ? 'true' : 'false';
-	if ( base === 'string' || base === 'token' ) return quote( String( v ) );
+	if ( base === 'string' || base === 'token' || base === 'pathExpression' ) return quote( String( v ) );
 	if ( base === 'asset' ) return formatAsset( v );
 	if ( base === 'dictionary' ) return formatDictionary( v, '' );
 
@@ -142,12 +142,12 @@ function formatDictionary( dict, indent ) {
 
 }
 
-function formatLayerOffset( offset ) {
+function formatLayerOffset( offset, customData = null, indent = '' ) {
 
-	if ( ! offset ) return '';
 	const parts = [];
-	if ( offset.offset ) parts.push( `offset = ${ offset.offset }` );
-	if ( offset.scale !== undefined && offset.scale !== 1 ) parts.push( `scale = ${ offset.scale }` );
+	if ( offset?.offset ) parts.push( `offset = ${ offset.offset }` );
+	if ( offset?.scale !== undefined && offset.scale !== 1 ) parts.push( `scale = ${ offset.scale }` );
+	if ( customData && Object.keys( customData ).length ) parts.push( `customData = ${ formatDictionary( customData, indent ) }` );
 	return parts.length ? ` (${ parts.join( '; ' ) })` : '';
 
 }
@@ -157,7 +157,7 @@ function formatReference( r ) {
 	let s = '';
 	if ( r.assetPath ) s += formatAsset( r.assetPath );
 	if ( r.primPath ) s += `<${ r.primPath }>`;
-	return s + formatLayerOffset( r.layerOffset );
+	return s + formatLayerOffset( r.layerOffset, r.customData );
 
 }
 
@@ -217,6 +217,11 @@ function formatMetadataEntries( metadata, indent, kind ) {
 
 			const offsets = metadata.subLayerOffsets || [];
 			lines.push( `${ indent }subLayers = [\n${ value.map( ( p, i ) => `${ indent }    ${ formatAsset( p ) }${ formatLayerOffset( offsets[ i ] ) }` ).join( ',\n' ) }\n${ indent }]` );
+
+		} else if ( key === 'layerRelocates' || key === 'relocates' ) {
+
+			const pairs = value.map( ( [ a, b ] ) => `${ indent }    <${ a }>: <${ b }>` );
+			lines.push( `${ indent }relocates = {\n${ pairs.join( ',\n' ) }\n${ indent }}` );
 
 		} else if ( key === 'subLayerOffsets' ) {
 
@@ -309,6 +314,7 @@ function writePrimContents( out, spec, indent ) {
 
 	for ( const prop of spec.properties.values() ) writeProperty( out, prop, indent );
 
+	if ( spec.metadata.propertyOrder ) out.push( `${ indent }reorder properties = [${ spec.metadata.propertyOrder.map( quote ).join( ', ' ) }]` );
 	if ( spec.metadata.primOrder ) out.push( `${ indent }reorder nameChildren = [${ spec.metadata.primOrder.map( quote ).join( ', ' ) }]` );
 
 	for ( const child of spec.children.values() ) {

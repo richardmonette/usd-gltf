@@ -358,7 +358,7 @@ function typeValue( raw, typeName ) {
 
 	if ( typeName === 'asset' ) return new AssetPath( raw instanceof AssetRef ? raw.path : String( raw ) );
 	if ( typeName === 'bool' ) return raw === true || raw === 1;
-	if ( typeName === 'string' || typeName === 'token' ) return raw instanceof Ident ? raw.name : raw;
+	if ( typeName === 'string' || typeName === 'token' || typeName === 'pathExpression' ) return raw instanceof Ident ? raw.name : raw;
 	if ( /^quat[hfd]$/.test( typeName ) ) return [ raw[ 1 ], raw[ 2 ], raw[ 3 ], raw[ 0 ] ];
 	if ( /^matrix[234]d$|^frame4d$/.test( typeName ) ) return raw.flat();
 	if ( raw instanceof Tuple ) return Array.from( raw );
@@ -523,6 +523,22 @@ function parseMetadata( lx, metadata, kind ) {
 			const layers = parseItems( lx, parseReferenceItem );
 			metadata.subLayers = layers.map( ( r ) => r.assetPath );
 			metadata.subLayerOffsets = layers.map( ( r ) => r.layerOffset );
+
+		} else if ( key === 'relocates' ) {
+
+			// { <source>: <target>, ... }; layer relocates use the layerRelocates field, as in usdc
+			const pairs = [];
+			lx.expect( '{' );
+			while ( ! lx.eat( '}' ) ) {
+
+				const from = lx.path();
+				lx.expect( ':' );
+				pairs.push( [ from, lx.path() ] );
+				lx.eat( ',' );
+
+			}
+
+			metadata[ kind === 'layer' ? 'layerRelocates' : 'relocates' ] = pairs;
 
 		} else if ( key === 'variants' ) {
 
