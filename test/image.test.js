@@ -768,7 +768,9 @@ test( 'imageMimeType and decodeImage sniff the format', () => {
 	assert.equal( imageMimeType( new Uint8Array( [ 0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A, 0 ] ) ), 'image/ktx2' );
 	assert.equal( imageMimeType( new Uint8Array( [ 1, 2, 3 ] ) ), null );
 	assert.equal( decodeImage( png.buffer, 'image/jpeg' ).channels, 2 );
-	assert.throws( () => decodeImage( new TextEncoder().encode( 'RIFF\0\0\0\0WEBPVP8 ' ) ), /image\/webp/ );
+	// a truncated WebP reaches the WebP decoder, which rejects it
+	assert.throws( () => decodeImage( new TextEncoder().encode( 'RIFF\0\0\0\0WEBPVP8 ' ) ), /webp/ );
+	assert.throws( () => decodeImage( new Uint8Array( [ 0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A, 0 ] ) ), /image\/ktx2/ );
 
 } );
 
