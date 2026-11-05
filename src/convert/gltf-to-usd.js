@@ -394,7 +394,7 @@ export class GLTFToUSD {
 			if ( sgTex ) { link( 'specularColor', 'color3f', sgTex, 'rgb' ); link( 'roughness', 'float', sgTex, 'a' ); }
 			else { set( 'specularColor', 'color3f', sf ); set( 'roughness', 'float', 1 - g ); }
 
-		} else if ( ! unlit ) {
+		} else {
 
 			const metallic = pbr.metallicFactor ?? 1;
 			const roughness = pbr.roughnessFactor ?? 1;
@@ -456,8 +456,11 @@ export class GLTFToUSD {
 		// keep whatever UsdPreviewSurface can't express, with textures as package paths
 		const stash = {};
 		for ( const [ key, value ] of Object.entries( ext ) ) if ( ! MAPPED_MATERIAL_EXTENSIONS.has( key ) ) stash[ key ] = await this.stashTextures( value );
+		if ( ext.KHR_materials_ior ) stash.KHR_materials_ior = ext.KHR_materials_ior;
 		if ( material.extras !== undefined ) stash.extras = material.extras;
 		if ( material.doubleSided ) stash.doubleSided = true;
+		// blending can't be inferred from an opaque opacity
+		if ( alphaMode !== 'OPAQUE' ) { stash.alphaMode = alphaMode; if ( alphaMode === 'MASK' ) stash.alphaCutoff = material.alphaCutoff ?? 0.5; }
 		if ( Object.keys( stash ).length ) {
 
 			stash.name = material.name;
@@ -732,7 +735,7 @@ export class GLTFToUSD {
 		if ( attrs.TANGENT !== undefined ) b.attr( prim, 'primvars:tangents', 'float4[]', doc.getFloats( attrs.TANGENT ).array, { interpolation: 'vertex' } );
 
 		this.writeColors( prim, attrs, null, 'vertex' );
-		if ( attrs.COLOR_0 !== undefined ) prim.metadata.customData = { gltf: { color0: true } };
+		if ( attrs.COLOR_0 !== undefined ) gltfData( prim ).color0 = true;
 
 		const material = primitive.material !== undefined ? this.json.materials[ primitive.material ] : null;
 		if ( material?.doubleSided ) b.attr( prim, 'doubleSided', 'bool', true, { uniform: true } );
@@ -1172,9 +1175,68 @@ export class GLTFToUSD {
 
 		} );
 
-		if ( multiple ) this.root.metadata.variants = { animation: names[ 0 ] };
+		if ( multiple ) {
+
+			this.root.metadata.variants = { ...this.root.metadata.variants, animation: names[ 0 ] };
+			this.moveDefaultsIntoVariants( variantSet );
+
+		}
 
 		void b;
+
+	}
+
+	// Local opinions are stronger than variant opinions, so a value authored on the prim itself would
+	// hide the time samples inside the variants. Defaults of anything a variant animates move into
+	// every variant instead.
+	moveDefaultsIntoVariants( variantSet ) {
+
+		const animated = new Map(); // path below the root -> Set of property names
+
+		const collect = ( spec, path ) => {
+
+			for ( const prop of spec.properties.values() ) if ( prop.timeSamples || prop.targets ) ( animated.get( path ) || animated.set( path, new Set() ).get( path ) ).add( prop.name );
+			for ( const child of spec.children.values() ) collect( child, path + '/' + child.name );
+
+		};
+
+		for ( const variant of variantSet.values() ) collect( variant, '' );
+
+		for ( const [ path, names ] of animated ) {
+
+			const local = this.findSpec( this.b.path( this.root ) + path );
+			if ( ! local ) continue;
+
+			for ( const name of names ) {
+
+				const prop = local.properties.get( name );
+				if ( ! prop ) continue;
+				const value = prop.type === 'relationship' ? prop.targets : prop.default;
+				if ( value === undefined || value === null ) continue;
+
+				for ( const variant of variantSet.values() ) {
+
+					let spec = variant;
+					for ( const part of path.split( '/' ).filter( Boolean ) ) spec = spec.children.get( part ) ?? spec.addChild( new PrimSpec( part, 'over', '' ) );
+					let own = spec.properties.get( name );
+					if ( ! own ) {
+
+						own = spec.addProperty( new PropertySpec( name, prop.type ) );
+						own.typeName = prop.typeName;
+
+					}
+
+					if ( prop.type === 'relationship' ) { if ( ! own.targets ) own.targets = value; }
+					else if ( ! own.timeSamples && own.default === undefined ) own.default = value;
+
+				}
+
+				if ( prop.type === 'relationship' ) local.properties.delete( name );
+				else prop.default = undefined;
+
+			}
+
+		}
 
 	}
 
@@ -1530,6 +1592,8 @@ export class GLTFToUSD {
 				const material = mapping ? mapping.material : primitive.material;
 				const path = material !== undefined ? this.materialPaths.get( material ) : this.defaultMaterialPath();
 				if ( ! path ) continue;
+				// the binding without a variant selected, which glTF has and USD doesn't
+				if ( i === 0 && primitive.material !== undefined ) gltfData( prim ).material = this.materialPaths.get( primitive.material );
 				const over = this.overFor( variant, prim );
 				const rel = over.addProperty( new PropertySpec( 'material:binding', 'relationship' ) );
 				rel.targets = ListOp.explicit( [ path ] );
@@ -1542,9 +1606,18 @@ export class GLTFToUSD {
 		const op = this.root.metadata.variantSetNames || new ListOp();
 		op.prepended.push( 'materialVariant' );
 		this.root.metadata.variantSetNames = op;
-		this.root.metadata.variants = { ...this.root.metadata.variants };
+		this.root.metadata.variants = { ...this.root.metadata.variants, materialVariant: names[ 0 ] };
+		this.moveDefaultsIntoVariants( set );
 
 	}
+
+}
+
+// The customData.gltf dictionary of a prim spec, where glTF only data is kept.
+function gltfData( spec ) {
+
+	const customData = spec.metadata.customData ||= {};
+	return customData.gltf ||= {};
 
 }
 

@@ -159,6 +159,15 @@ export class USDToGLTF {
 
 	// --- materials ---
 
+	// glTF primitives have a material with no variant selected; our glTF -> USD conversion keeps it here
+	defaultMaterial( prim ) {
+
+		const path = prim.getMetadata( 'customData' )?.gltf?.material;
+		const material = path && this.stage.getPrimAtPath( path );
+		return material?.typeName === 'Material' ? material : null;
+
+	}
+
 	boundMaterial( prim, stage = this.stage ) {
 
 		// UsdShade resolution: the nearest binding wins unless an ancestor's binding is
@@ -279,7 +288,7 @@ export class USDToGLTF {
 
 			const indices = data.vertexCount < 65536 ? Uint16Array.from( group.indices ) : Uint32Array.from( group.indices );
 			const primitive = { attributes: { ...attributes }, indices: this.builder.addAccessor( indices, 'SCALAR', { target: 34963 } ) };
-			const material = ( group.subset && this.boundMaterial( group.subset ) ) || this.boundMaterial( prim );
+			const material = ( group.subset && this.boundMaterial( group.subset ) ) || this.defaultMaterial( prim ) || this.boundMaterial( prim );
 
 			if ( material ) primitive.material = await this.materials.convert( material, { doubleSided, vertexColors } );
 			else primitive.material = this.materials.defaultMaterial( data.constantColor, data.constantOpacity, vertexColors, doubleSided );

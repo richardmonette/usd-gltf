@@ -689,11 +689,17 @@ export class MaterialConverter {
 		const anchor = material.nodes[ 0 ]?.specs[ 0 ]?.layer.identifier ?? '';
 		if ( stash.name !== undefined ) m.name = stash.name;
 		if ( stash.doubleSided ) m.doubleSided = true;
+		if ( stash.alphaMode ) {
+
+			m.alphaMode = stash.alphaMode;
+			if ( stash.alphaMode === 'MASK' ) m.alphaCutoff = stash.alphaCutoff; else delete m.alphaCutoff;
+
+		}
 		if ( stash.extras !== undefined ) m.extras = stash.extras;
 
 		for ( const [ key, value ] of Object.entries( stash ) ) {
 
-			if ( key === 'name' || key === 'doubleSided' || key === 'extras' ) continue;
+			if ( key === 'name' || key === 'doubleSided' || key === 'extras' || key === 'alphaMode' || key === 'alphaCutoff' ) continue;
 			m.extensions = { ...m.extensions, [ key ]: await this.restoreTextures( value, anchor ) };
 			this.builder.useExtension( key );
 
@@ -791,15 +797,6 @@ export class MaterialConverter {
 
 		}
 
-		if ( inputs.unlit ) {
-
-			m.extensions = { KHR_materials_unlit: {} };
-			this.builder.useExtension( 'KHR_materials_unlit' );
-			m.pbrMetallicRoughness = pbr;
-			return;
-
-		}
-
 		// metallic roughness: G roughness, B metallic
 		const rough = broadcast( inputs.roughness, 1 )[ 0 ];
 		const metal = broadcast( inputs.metallic, 1 )[ 0 ];
@@ -819,6 +816,14 @@ export class MaterialConverter {
 		}
 
 		m.pbrMetallicRoughness = pbr;
+
+		if ( inputs.unlit ) {
+
+			m.extensions = { KHR_materials_unlit: {} };
+			this.builder.useExtension( 'KHR_materials_unlit' );
+			return;
+
+		}
 
 		// emissive
 		const emissive = broadcast( inputs.emissiveColor, 3 );
@@ -845,7 +850,7 @@ export class MaterialConverter {
 
 			// glTF occlusion is lerp( 1, tex, strength ): scale s with bias 1 - s maps exactly
 			const strength = occ.scale;
-			const asStrength = Math.abs( occ.scale + occ.bias - 1 ) < 1e-5 && strength > 0 && strength <= 1;
+			const asStrength = Math.abs( occ.scale + occ.bias - 1 ) < 1e-5 && strength >= 0 && strength <= 1;
 			const o = await this.channelTexture( [ { term: asStrength ? { ...occ, scale: 1, bias: 0 } : occ, out: 0 } ], { allowFactor: false } );
 
 			if ( o ) {
