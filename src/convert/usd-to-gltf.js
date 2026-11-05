@@ -3,7 +3,7 @@
 import { GLTFBuilder } from '../gltf/document.js';
 import { Stage } from '../usd/stage.js';
 import { getXformOps, evaluateOps, xformSampleTimes } from '../usd/xform.js';
-import { MaterialConverter } from './usd-material.js';
+import { MaterialConverter, gltfTextureTransform } from './usd-material.js';
 import { triangulateMesh, normalizeNormals } from './usd-mesh.js';
 import { generateShape } from './usd-shapes.js';
 import { compose, decompose, identity, invert, isIdentity, multiply, normalMatrix, transformDirection, transformPoint } from '../util/math.js';
@@ -69,6 +69,7 @@ export class USDToGLTF {
 
 		this.assignSkins();
 		this.channels = this.collectChannels( stage, null );
+		this.channels.push( ...this.stashedPointerChannels() );
 		await this.convertVariants();
 		this.writeAnimations();
 
@@ -567,10 +568,146 @@ export class USDToGLTF {
 
 	}
 
+	// Animation pointer channels our glTF -> USD conversion kept as data (targets USD can't express).
+	stashedPointerChannels() {
+
+		let stash;
+		try { stash = JSON.parse( this.stage.rootLayer.metadata.customLayerData?.gltf?.json ?? 'null' ); } catch { return []; }
+		if ( ! stash?.pointers ) return [];
+
+		const tcps = this.stage.timeCodesPerSecond || 24;
+		const materialIndex = ( path ) => {
+
+			for ( const [ key, index ] of this.materials.materials ) if ( key.split( '|' )[ 0 ] === path ) return index;
+			return undefined;
+
+		};
+
+		const channels = [];
+
+		for ( const p of stash.pointers ) {
+
+			let pointer = p.path;
+
+			if ( p.material ) {
+
+				const index = materialIndex( p.material );
+				if ( index === undefined ) continue;
+				pointer = `/materials/${ index }${ p.path }`;
+
+			} else if ( p.node ) {
+
+				const index = this.primNodes.get( p.node );
+				if ( index === undefined ) continue;
+				pointer = `/nodes/${ index }${ p.path }`;
+
+			}
+
+			channels.push( {
+				pointer, animation: p.animation ?? null, interpolation: p.interpolation,
+				times: p.input.map( ( t ) => t * tcps ), values: p.output,
+				accessorType: [ 'SCALAR', 'SCALAR', 'VEC2', 'VEC3', 'VEC4' ][ p.width ] || 'SCALAR',
+			} );
+
+		}
+
+		return channels;
+
+	}
+
+	// Animated material inputs and texture transforms as KHR_animation_pointer channels.
+	materialChannels( stage, animation ) {
+
+		const channels = [];
+		const SLOTS = { diffuseColor: 'pbrMetallicRoughness/baseColorTexture', opacity: 'pbrMetallicRoughness/baseColorTexture', roughness: 'pbrMetallicRoughness/metallicRoughnessTexture', metallic: 'pbrMetallicRoughness/metallicRoughnessTexture', normal: 'normalTexture', occlusion: 'occlusionTexture', emissiveColor: 'emissiveTexture' };
+		const FACTORS = { diffuseColor: 'pbrMetallicRoughness/baseColorFactor', emissiveColor: 'emissiveFactor', roughness: 'pbrMetallicRoughness/roughnessFactor', metallic: 'pbrMetallicRoughness/metallicFactor' };
+		const times = ( ...props ) => [ ...new Set( props.flatMap( ( p ) => ( p?.isAnimated ? [ ...p.timeSamples.keys() ] : [] ) ) ) ].sort( ( a, b ) => a - b );
+		const previous = this.materials.stage;
+		this.materials.stage = stage;
+
+		for ( const [ key, index ] of this.materials.materials ) {
+
+			const [ path, ...rest ] = key.split( '|' );
+			if ( rest.some( ( r ) => r !== 'ds' ) || path.startsWith( 'display' ) ) continue;
+			const material = stage.getPrimAtPath( path );
+			const shader = material && this.materials.surfaceOf( material )?.shader;
+			const m = this.json.materials[ index ];
+			if ( ! shader || ! m ) continue;
+			const done = new Set();
+
+			for ( const input of Object.keys( SLOTS ) ) {
+
+				const prop = shader.getProperty( 'inputs:' + input );
+				if ( ! prop ) continue;
+				const source = prop.connections[ 0 ];
+
+				if ( ! source ) {
+
+					// constant factors
+					if ( ! prop.isAnimated || ! FACTORS[ input ] ) continue;
+					const opacity = shader.getProperty( 'inputs:opacity' );
+					const t = times( prop, input === 'diffuseColor' ? opacity : null );
+					const values = t.flatMap( ( time ) => {
+
+						const v = prop.valueAt( time );
+						if ( input === 'diffuseColor' ) return [ ...v, opacity?.valueAt( time ) ?? 1 ];
+						return Array.isArray( v ) || ArrayBuffer.isView( v ) ? Array.from( v ) : [ v ];
+
+					} );
+					const width = values.length / t.length;
+					channels.push( { pointer: `/materials/${ index }/${ FACTORS[ input ] }`, times: t, values, animation, accessorType: [ 'SCALAR', 'SCALAR', 'VEC2', 'VEC3', 'VEC4' ][ width ] } );
+					continue;
+
+				}
+
+				const texture = stage.getPrimAtPath( source.slice( 0, source.lastIndexOf( '.' ) ) );
+				if ( texture?.get( 'info:id' ) !== 'UsdUVTexture' ) continue;
+
+				// texture scale is the factor
+				const scale = texture.getProperty( 'inputs:scale' );
+				if ( scale?.isAnimated && ( input === 'diffuseColor' || input === 'emissiveColor' ) && ! done.has( input ) ) {
+
+					done.add( input );
+					const t = times( scale );
+					const rgba = input === 'diffuseColor';
+					channels.push( { pointer: `/materials/${ index }/${ FACTORS[ input ] }`, times: t, values: t.flatMap( ( time ) => Array.from( scale.valueAt( time ) ).slice( 0, rgba ? 4 : 3 ) ), animation, accessorType: rgba ? 'VEC4' : 'VEC3' } );
+
+				}
+
+				// texture transform
+				const st = texture.getProperty( 'inputs:st' )?.connections[ 0 ];
+				const transform = st && stage.getPrimAtPath( st.slice( 0, st.lastIndexOf( '.' ) ) );
+				if ( transform?.get( 'info:id' ) !== 'UsdTransform2d' || done.has( SLOTS[ input ] ) ) continue;
+				const r = transform.getProperty( 'inputs:rotation' ), s = transform.getProperty( 'inputs:scale' ), tr = transform.getProperty( 'inputs:translation' );
+				const t = times( r, s, tr );
+				if ( ! t.length ) continue;
+				done.add( SLOTS[ input ] );
+
+				const slot = SLOTS[ input ].split( '/' ).reduce( ( o, k ) => o?.[ k ], m );
+				if ( ! slot ) continue;
+				const ext = ( slot.extensions ||= {} ).KHR_texture_transform ||= {};
+				if ( slot.texCoord && ext.texCoord === undefined ) ext.texCoord = slot.texCoord;
+				this.builder.useExtension( 'KHR_texture_transform' );
+
+				const at = t.map( ( time ) => gltfTextureTransform( { rotation: r?.valueAt( time ) ?? 0, scale: s?.valueAt( time ) ?? [ 1, 1 ], translation: tr?.valueAt( time ) ?? [ 0, 0 ] } ) || {} );
+				const base = `/materials/${ index }/${ SLOTS[ input ] }/extensions/KHR_texture_transform`;
+				channels.push( { pointer: base + '/offset', times: t, values: at.flatMap( ( x ) => x.offset || [ 0, 0 ] ), animation, accessorType: 'VEC2' } );
+				channels.push( { pointer: base + '/rotation', times: t, values: at.map( ( x ) => x.rotation || 0 ), animation, accessorType: 'SCALAR' } );
+				channels.push( { pointer: base + '/scale', times: t, values: at.flatMap( ( x ) => x.scale || [ 1, 1 ] ), animation, accessorType: 'VEC2' } );
+
+			}
+
+		}
+
+		this.materials.stage = previous;
+		return channels;
+
+	}
+
 	// Every animated value on a stage as glTF channels: xforms, visibility, skeletons and blend shape weights.
 	collectChannels( stage, animation ) {
 
-		const channels = [];
+		const channels = this.materialChannels( stage, animation );
 
 		for ( const [ path, node ] of this.primNodes ) {
 
@@ -745,7 +882,17 @@ export class USDToGLTF {
 
 			}
 
-			if ( info ) node.skin = info.skinIndex;
+			if ( ! info ) continue;
+
+			// glTF ignores a skinned mesh node's transform, and validators expect such nodes at the
+			// scene root, so the mesh moves to a root node of its own; the original keeps any children
+			const index = this.addNode( { name: node.name, mesh: node.mesh, skin: info.skinIndex } );
+			if ( node.extras ) this.json.nodes[ index ].extras = node.extras;
+			if ( node.weights ) { this.json.nodes[ index ].weights = node.weights; delete node.weights; }
+			const old = this.json.nodes.indexOf( node );
+			delete node.mesh;
+			this.json.scenes[ 0 ].nodes.push( index );
+			for ( const entry of this.meshNodes ) if ( entry.node === old ) entry.node = index;
 
 		}
 
@@ -880,6 +1027,7 @@ export class USDToGLTF {
 		}
 
 		node.extensions = { ...node.extensions, KHR_lights_punctual: { light: this.lights.push( light ) - 1 } };
+		( this.lightIndex ||= new Map() ).set( prim.path, this.lights.length - 1 );
 
 	}
 
@@ -1072,7 +1220,7 @@ export class USDToGLTF {
 
 			const output = c.type === 'bool'
 				? this.builder.addAccessor( Uint8Array.from( c.values, ( v ) => ( v ? 1 : 0 ) ), 'SCALAR' )
-				: this.builder.addAccessor( Float32Array.from( c.values ), c.path === 'weights' ? 'SCALAR' : c.path === 'rotation' ? 'VEC4' : 'VEC3' );
+				: this.builder.addAccessor( Float32Array.from( c.values ), c.accessorType || ( c.path === 'weights' ? 'SCALAR' : c.path === 'rotation' ? 'VEC4' : 'VEC3' ) );
 
 			const sampler = anim.samplers.push( { input: inputs.get( key ), output, interpolation: c.interpolation || 'LINEAR' } ) - 1;
 

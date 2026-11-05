@@ -159,6 +159,13 @@ export class GLTFToUSD {
 		this.convertAnimations();
 		this.convertMaterialVariants();
 
+		if ( this.unmappedPointers ) {
+
+			const data = layer.metadata.customLayerData.gltf;
+			data.json = JSON.stringify( { ...JSON.parse( data.json ), pointers: this.unmappedPointers } );
+
+		}
+
 		if ( this.timeCodes.size ) {
 
 			const times = [ ...this.timeCodes ];
@@ -1171,7 +1178,7 @@ export class GLTFToUSD {
 			if ( target ) variantSet.set( name, target );
 			const specFor = ( prim ) => target ? this.overFor( target, prim ) : prim;
 
-			this.writeAnimation( this.animTracks[ a ], specFor, a );
+			this.writeAnimation( this.animTracks[ a ], specFor, multiple ? name : null );
 
 		} );
 
@@ -1252,7 +1259,7 @@ export class GLTFToUSD {
 
 	}
 
-	writeAnimation( anim, specFor, animationIndex ) {
+	writeAnimation( anim, specFor, animationName ) {
 
 		const b = this.b;
 		const json = this.json;
@@ -1262,7 +1269,7 @@ export class GLTFToUSD {
 
 			if ( track.path === 'pointer' ) {
 
-				this.writePointerTrack( track, specFor );
+				this.writePointerTrack( track, specFor, animationName );
 				continue;
 
 			}
@@ -1367,7 +1374,7 @@ export class GLTFToUSD {
 
 		}
 
-		void b; void animationIndex;
+		void b;
 
 	}
 
@@ -1426,7 +1433,7 @@ export class GLTFToUSD {
 
 	}
 
-	writePointerTrack( track, specFor ) {
+	writePointerTrack( track, specFor, animationName ) {
 
 		const pointer = track.pointer;
 		let m;
@@ -1465,8 +1472,13 @@ export class GLTFToUSD {
 
 		}
 
-		// anything else is kept as data for the way back
-		( this.unmappedPointers ||= [] ).push( pointer );
+		// anything else (extension textures, cameras...) is kept as data for the way back, with
+		// glTF indices replaced by prim paths so it survives renumbering
+		const target = { path: pointer };
+		if ( ( m = /^\/materials\/(\d+)(\/.*)$/.exec( pointer ) ) && this.materialPaths.has( + m[ 1 ] ) ) Object.assign( target, { material: this.materialPaths.get( + m[ 1 ] ), path: m[ 2 ] } );
+		else if ( ( m = /^\/nodes\/(\d+)(\/.*)$/.exec( pointer ) ) && this.nodePrims.has( + m[ 1 ] ) ) Object.assign( target, { node: this.b.path( this.nodePrims.get( + m[ 1 ] ) ), path: m[ 2 ] } );
+		for ( const t of track.input ) this.timeCodes.add( t * TIME_CODES_PER_SECOND );
+		( this.unmappedPointers ||= [] ).push( { ...target, animation: animationName, interpolation: track.interpolation, width: track.width, input: Array.from( track.input ), output: Array.from( track.output ) } );
 
 	}
 
