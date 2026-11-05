@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Conformance checks every Khronos sample model as `.glb` and embedded `.gltf` too, not just `.gltf` (302 conversions).
+- GLB round trip tests in the regular test suite, using a generated model, so they run without the corpora.
+
 ## 0.1.0
 
 - USD to glTF and glTF to USD in pure JavaScript, in Node and browsers: usda, usdc and usdz input and output, USD composition (sublayers, references, payloads, inherits, specializes, variant sets), meshes, UsdPreviewSurface and MaterialX preview materials, UsdSkel skinning and blend shapes, animation, material and animation variants, cameras, lights and point instancers.

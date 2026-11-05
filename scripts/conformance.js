@@ -220,9 +220,23 @@ async function khronos() {
 	mkdirSync( usdzDir, { recursive: true } );
 	const converted = new Map();
 
-	for ( const m of index ) {
+	// every model as .gltf, and as .glb and embedded .gltf where it has those variants
+	const cases = [];
 
-		const file = join( corpus, 'khronos', 'Models', m.name, 'glTF', m.variants.glTF );
+	for ( const model of index ) {
+
+		for ( const [ variant, label ] of [ [ 'glTF', '' ], [ 'glTF-Binary', ' (glb)' ], [ 'glTF-Embedded', ' (embedded)' ] ] ) {
+
+			const file = model.variants[ variant ] && join( corpus, 'khronos', 'Models', model.name, variant, model.variants[ variant ] );
+			if ( file && existsSync( file ) ) cases.push( { name: model.name + label, file } );
+
+		}
+
+	}
+
+	for ( const m of cases ) {
+
+		const file = m.file;
 
 		try {
 
@@ -244,7 +258,7 @@ async function khronos() {
 	const stats = usdStats( [ ...converted.values() ].filter( ( c ) => c.path ).map( ( c ) => c.path ), true );
 	const results = [];
 
-	for ( const m of index ) {
+	for ( const m of cases ) {
 
 		const c = converted.get( m.name );
 		const problems = [];

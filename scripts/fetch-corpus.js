@@ -43,7 +43,7 @@ function fetchKhronos() {
 	const git = ( ...args ) => execFileSync( 'git', args, { cwd: dir, stdio: 'inherit' } );
 
 	execFileSync( 'git', [ 'clone', '--depth=1', '--filter=blob:none', '--no-checkout', 'https://github.com/KhronosGroup/glTF-Sample-Assets.git', dir ], { stdio: 'inherit' } );
-	git( 'sparse-checkout', 'set', '--no-cone', '/Models/model-index.json', '/Models/*/glTF/', '/Models/*/glTF-Binary/' );
+	git( 'sparse-checkout', 'set', '--no-cone', '/Models/model-index.json', '/Models/*/glTF/', '/Models/*/glTF-Binary/', '/Models/*/glTF-Embedded/' );
 	git( 'checkout' );
 
 }

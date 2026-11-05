@@ -1,6 +1,6 @@
 # usd-gltf
 
-Convert between [OpenUSD](https://openusd.org/) and [glTF](https://www.khronos.org/gltf/) in both directions, in pure JavaScript with no dependencies. Runs in Node and the browser, [live demo](https://richardmonette.github.io/usd-gltf/examples/). Reads and writes all three USD encodings: text `.usda`, binary crate `.usdc`, and the `.usdz` package.
+Convert between [OpenUSD](https://openusd.org/) and [glTF](https://www.khronos.org/gltf/) (`.glb`, or `.gltf` with embedded or external files) in both directions, in pure JavaScript with no dependencies. Runs in Node and the browser, [live demo](https://richardmonette.github.io/usd-gltf/examples/). Reads and writes all three USD encodings: text `.usda`, binary crate `.usdc`, and the `.usdz` package.
 
 ```
 npm install usd-gltf
@@ -42,7 +42,7 @@ glTF to USD writes `UsdPreviewSurface` materials, UsdSkel skins and blend shapes
 Current status:
 
 - All 18 USD files in Apple's AR Quick Look gallery convert to GLB. Per mesh triangle counts and world space bounds at the start, middle and end of each animation match OpenUSD with skinning baked, and the Khronos glTF Validator reports no errors. (The gallery's three `.reality` files are RealityKit's format, not USD.)
-- All 150 Khronos glTF sample models convert to USDZ that OpenUSD's validators accept with no errors or warnings, with geometry matching the source at several animation times, and convert back to glTF with identical materials, material variants and animations.
+- All 150 Khronos glTF sample models convert to USDZ that OpenUSD's validators accept with no errors or warnings, with geometry matching the source at several animation times, and convert back to glTF with identical materials, material variants and animations. Each model is checked as `.gltf`, and also as `.glb` (120 models) and embedded `.gltf` (32 models) where the sample set has those versions: 302 conversions in all.
 
 The acceptance corpora are every model in [Apple's AR Quick Look gallery](https://developer.apple.com/augmented-reality/quick-look/) and every model in the [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets). Conversions are checked against Pixar's OpenUSD (`usd-core`) and the Khronos glTF Validator: per mesh triangle counts and world space bounds at several animation times, with skinning baked by OpenUSD, must match.
 
