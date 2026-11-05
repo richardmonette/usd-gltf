@@ -14,14 +14,14 @@ const SHAPE_TYPES = new Set( [ 'Cube', 'Sphere', 'Cylinder', 'Cone', 'Capsule', 
 
 export class USDToGLTF {
 
-	constructor( stage, { log = () => {}, materialVariants = true, debug = false } = {} ) {
+	constructor( stage, { log = () => {}, materialVariants = true, debug = false, imageDecoder = null } = {} ) {
 
 		this.stage = stage;
 		this.log = log;
 		this.debug = debug; // records usd paths and time mapping in extras, for verification
 		this.materialVariants = materialVariants;
 		this.builder = new GLTFBuilder();
-		this.materials = new MaterialConverter( stage, this.builder, { log } );
+		this.materials = new MaterialConverter( stage, this.builder, { log, imageDecoder } );
 		this.json = this.builder.json;
 		this.meshCache = new Map();
 		this.primNodes = new Map(); // prim path -> node index (first instance)

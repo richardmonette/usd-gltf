@@ -52,3 +52,43 @@ export function decodeImage( bytes, mimeType ) {
 	throw new Error( `usd-gltf: cannot decode ${ type || 'unknown' } image` );
 
 }
+
+const hasNativeDecoder = typeof createImageBitmap === 'function' && typeof OffscreenCanvas === 'function';
+
+/**
+ * Decodes with the platform's image decoder where there is one (browsers and workers), which is
+ * faster and supports more formats, falling back to the JavaScript decoders (Node).
+ * Canvas pixels are 8 bit RGBA with premultiplied storage, so alpha below 1 can lose precision.
+ * @param {Uint8Array} bytes
+ * @param {string} [mimeType]
+ * @param {( bytes: Uint8Array, mimeType?: string ) => Promise<object>|object} [decoder] overrides both
+ */
+export async function decodeImageAsync( bytes, mimeType, decoder = null ) {
+
+	bytes = toBytes( bytes );
+	if ( decoder ) return decoder( bytes, mimeType );
+	const type = imageMimeType( bytes ) || mimeType;
+
+	if ( hasNativeDecoder ) {
+
+		try {
+
+			const bitmap = await createImageBitmap( new Blob( [ bytes ], { type } ), { premultiplyAlpha: 'none', colorSpaceConversion: 'none', imageOrientation: 'none' } );
+			const canvas = new OffscreenCanvas( bitmap.width, bitmap.height );
+			const context = canvas.getContext( '2d', { willReadFrequently: true } );
+			context.drawImage( bitmap, 0, 0 );
+			bitmap.close?.();
+			const { data } = context.getImageData( 0, 0, canvas.width, canvas.height );
+			return { width: canvas.width, height: canvas.height, channels: 4, bitDepth: 8, data: new Uint8Array( data.buffer ) };
+
+		} catch {
+
+			// fall through to the JavaScript decoders
+
+		}
+
+	}
+
+	return decodeImage( bytes, type );
+
+}

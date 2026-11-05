@@ -6,7 +6,7 @@
 // and lets textures be referenced directly when glTF can express the result, or be repacked
 // (baked) into a new image when it can't, e.g. separate roughness and metallic maps.
 
-import { decodeImage, encodePNG, imageMimeType } from '../image/index.js';
+import { decodeImageAsync, encodePNG, imageMimeType } from '../image/index.js';
 import { multiply } from '../util/math.js';
 import { resolveAssetPath } from '../usd/stage.js';
 
@@ -68,11 +68,12 @@ function binary( a, b, op ) {
 
 export class MaterialConverter {
 
-	constructor( stage, builder, { log = () => {} } = {} ) {
+	constructor( stage, builder, { log = () => {}, imageDecoder = null } = {} ) {
 
 		this.stage = stage;
 		this.builder = builder;
 		this.log = log;
+		this.imageDecoder = imageDecoder;
 		this.uvNames = []; // uv set names in texCoord order
 		this.materials = new Map(); // key -> glTF material index
 		this.images = new Map(); // file -> { index, mimeType } | null
@@ -483,7 +484,7 @@ export class MaterialConverter {
 
 				try {
 
-					return decodeImage( await this.stage.readAsset( file ) );
+					return await decodeImageAsync( await this.stage.readAsset( file ), undefined, this.imageDecoder );
 
 				} catch ( e ) {
 

@@ -41,10 +41,10 @@ export async function usdToGLB( data, options = {} ) {
  * @param {{ format?: 'usda'|'usdc'|'usdz', resolver?: ( uri: string ) => Promise<Uint8Array> }} [options]
  * @returns {Promise<Uint8Array>}
  */
-export async function glbToUSD( data, { format = 'usdz', resolver = null, log } = {} ) {
+export async function glbToUSD( data, { format = 'usdz', resolver = null, log, imageDecoder } = {} ) {
 
 	const doc = await readGLTF( toBytes( data ), { resolver } );
-	const { layer, files } = await new GLTFToUSD( doc, { log } ).convert();
+	const { layer, files } = await new GLTFToUSD( doc, { log, imageDecoder } ).convert();
 
 	if ( format === 'usda' ) return new TextEncoder().encode( writeUSDA( layer ) );
 	if ( format === 'usdc' ) return writeUSDC( layer );
@@ -58,10 +58,10 @@ export async function glbToUSD( data, { format = 'usdz', resolver = null, log } 
  * For usda / usdc output the textures are separate files; this returns them alongside the layer.
  * @returns {Promise<{ layer: Uint8Array, files: Array<{ name: string, data: Uint8Array }> }>}
  */
-export async function glbToUSDFiles( data, { format = 'usda', resolver = null, log } = {} ) {
+export async function glbToUSDFiles( data, { format = 'usda', resolver = null, log, imageDecoder } = {} ) {
 
 	const doc = await readGLTF( toBytes( data ), { resolver } );
-	const { layer, files } = await new GLTFToUSD( doc, { log } ).convert();
+	const { layer, files } = await new GLTFToUSD( doc, { log, imageDecoder } ).convert();
 	return { layer: format === 'usdc' ? writeUSDC( layer ) : new TextEncoder().encode( writeUSDA( layer ) ), files };
 
 }

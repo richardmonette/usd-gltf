@@ -13,7 +13,7 @@
 
 import { AssetPath, Layer, ListOp, PrimSpec, PropertySpec } from '../usd/model.js';
 import { compose, decompose, identity, invert, multiply } from '../util/math.js';
-import { decodeImage, encodePNG, imageMimeType } from '../image/index.js';
+import { decodeImageAsync, encodePNG, imageMimeType } from '../image/index.js';
 
 const MODES = { POINTS: 0, LINES: 1, LINE_LOOP: 2, LINE_STRIP: 3, TRIANGLES: 4, TRIANGLE_STRIP: 5, TRIANGLE_FAN: 6 };
 const WRAP = { 10497: 'repeat', 33648: 'mirror', 33071: 'clamp' };
@@ -106,12 +106,13 @@ class Builder {
 
 export class GLTFToUSD {
 
-	constructor( doc, { log = () => {}, textureDir = 'textures', debug = false } = {} ) {
+	constructor( doc, { log = () => {}, textureDir = 'textures', debug = false, imageDecoder = null } = {} ) {
 
 		this.doc = doc;
 		this.json = doc.json;
 		this.log = log;
 		this.textureDir = textureDir;
+		this.imageDecoder = imageDecoder;
 		this.debug = debug; // returns the node/primitive -> prim path mapping, for verification
 		this.b = new Builder();
 		this.files = []; // { name, data } for the package
@@ -190,7 +191,7 @@ export class GLTFToUSD {
 				// usdz packages may only hold png and jpeg images
 				try {
 
-					bytes = encodePNG( decodeImage( bytes, mime ) );
+					bytes = encodePNG( await decodeImageAsync( bytes, mime, this.imageDecoder ) );
 					mime = 'image/png';
 
 				} catch ( e ) {
