@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0
 
 - USD to glTF and glTF to USD in pure JavaScript, in Node and browsers: usda, usdc and usdz input and output, USD composition (sublayers, references, payloads, inherits, specializes, variant sets), meshes, UsdPreviewSurface and MaterialX preview materials, UsdSkel skinning and blend shapes, animation, material and animation variants, cameras, lights and point instancers.
 - glTF to USD keeps what UsdPreviewSurface can't express in the material's `customData`, so converting back is lossless, including `KHR_animation_pointer` animations and `KHR_materials_variants`.
