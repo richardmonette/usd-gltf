@@ -1,0 +1,49 @@
+{
+  "name": "usd-gltf",
+  "version": "0.0.0",
+  "description": "Convert between USD (usda, usdc, usdz) and glTF / GLB, pure JavaScript with no dependencies",
+  "type": "module",
+  "main": "src/index.js",
+  "module": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "usd-gltf": "bin/usd-gltf.js"
+  },
+  "files": [
+    "src",
+    "bin"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "usd",
+    "usda",
+    "usdc",
+    "usdz",
+    "openusd",
+    "gltf",
+    "glb",
+    "converter",
+    "3d"
+  ],
+  "author": "Richard Monette",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/richardmonette/usd-gltf.git"
+  },
+  "bugs": {
+    "url": "https://github.com/richardmonette/usd-gltf/issues"
+  },
+  "homepage": "https://github.com/richardmonette/usd-gltf#readme",
+  "devDependencies": {
+    "gltf-validator": "^2.0.0-dev.3.10",
+    "meshoptimizer": "^1.3.0"
+  }
+}

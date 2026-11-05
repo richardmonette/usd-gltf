@@ -1,0 +1,273 @@
+#usda 1.0
+(
+    customLayerData = {
+        string author = "test"
+        dictionary nested = {
+            float f = 1.5
+            token t = "tok"
+            int3 v = (1, 2, 3)
+        }
+        double d = 0.1
+        int i = -7
+        bool b = true
+        asset a = @x.png@
+        string[] names = ["a", "b"]
+        float[] floats = [1.5, 2.5]
+        matrix4d m = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (1, 2, 3, 1) )
+    }
+    defaultPrim = "World"
+    doc = "Layer documentation"
+    endTimeCode = 10
+    framesPerSecond = 24
+    metersPerUnit = 0.01
+    startTimeCode = 1
+    subLayers = [
+        @./sub1.usda@ (offset = 2; scale = 0.5),
+        @./sub2.usda@
+    ]
+    timeCodesPerSecond = 24
+    upAxis = "Y"
+)
+
+class "Base"
+{
+    float baseAttr = 1
+}
+
+def Xform "World" (
+    prepend apiSchemas = ["MaterialBindingAPI", "GeomModelAPI"]
+    assetInfo = {
+        asset identifier = @./World.usd@
+        string name = "World"
+    }
+    customData = {
+        int count = 3
+    }
+    doc = "The world"
+    hidden = false
+    inherits = </Base>
+    kind = "assembly"
+    prepend references = [
+        @./ref.usda@</Ref> (offset = 1; scale = 2),
+        </Base>
+    ]
+    prepend payload = @./payload.usda@</P>
+    specializes = </Base>
+    variants = {
+        string shading = "red"
+        string size = "big"
+    }
+    prepend variantSets = ["shading", "size"]
+)
+{
+    bool b = true
+    uchar uc = 200
+    int i = -123456
+    int smallInt = 5
+    uint ui = 4000000000
+    int64 i64 = -9000000000
+    int64 i64small = 12
+    uint64 u64 = 9000000000
+    half h = 1.5
+    float f = 0.25
+    double d = 0.1
+    double dExact = 0.5
+    timecode tc = 12.5
+    string s = "hello \"world\""
+    token t = "myToken"
+    asset a = @./textures/a.png@
+    matrix2d m2 = ( (1, 2), (3, 4) )
+    matrix3d m3 = ( (1, 0, 0), (0, 2, 0), (0, 0, 3) )
+    matrix4d m4 = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (10.5, 20, 30, 1) )
+    matrix4d m4id = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1) )
+    quatd qd = (1, 2, 3, 4)
+    quatf qf = (0.5, 0.25, 0.125, 1)
+    quath qh = (1, 0, 0, 0)
+    double2 d2 = (1.5, 2.5)
+    double3 d3 = (1, 2, 3)
+    double4 d4 = (0.1, 0.2, 0.3, 0.4)
+    float2 f2 = (1, -2)
+    float3 f3 = (0.1, 0.2, 0.3)
+    float4 f4 = (1, 2, 3, 400)
+    half2 h2 = (1.5, -2)
+    half3 h3 = (0.5, 1, 2)
+    half4 h4 = (1, 2, 3, 4)
+    int2 i2 = (1, 2)
+    int3 i3 = (1000, 2, 3)
+    int4 i4 = (1, 2, 3, 4)
+    point3f p = (1, 2, 3)
+    normal3f n = (0, 1, 0)
+    vector3d v = (1, 0.5, 0.25)
+    color3f c3 = (0.8, 0.1, 0.1)
+    color4f c4 = (0.8, 0.1, 0.1, 1)
+    texCoord2f st = (0.5, 0.5)
+    float blocked = None
+    custom uniform token u = "uniformValue" (
+        allowedTokens = ["uniformValue", "other"]
+        customData = {
+            string note = "n"
+        }
+        displayGroup = "group"
+        displayName = "Nice name"
+        doc = "property doc"
+        hidden = true
+    )
+    bool[] ba = [true, false, true]
+    uchar[] uca = [1, 2, 255]
+    int[] ia = [1, 2, 3]
+    int[] iaBig = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, -100000, 70000, 3, 3, 3, 3]
+    int[] empty = []
+    uint[] uia = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 4000000000]
+    int64[] i64a = [1, -2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 9000000000]
+    uint64[] u64a = [1, 2, 9000000000]
+    half[] ha = [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5]
+    float[] fInts = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, -17]
+    float[] fLut = [0.5, 0.25, 0.5, 0.25, 0.5, 0.25, 0.5, 0.25, 0.5, 0.25, 0.5, 0.25, 0.5, 0.25, 0.5, 0.25, 0.75]
+    float[] fRaw = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8]
+    double[] da = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8]
+    double[] daInts = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+    timecode[] tca = [1, 2.5]
+    string[] sa = ["a", "b", "a"]
+    token[] ta = ["x", "y"]
+    asset[] aa = [@a.png@, @b.png@]
+    matrix4d[] m4a = [( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1) ), ( (2, 0, 0, 0), (0, 2, 0, 0), (0, 0, 2, 0), (1, 2, 3, 1) )]
+    quatf[] qfa = [(1, 0, 0, 0), (0.5, 0.5, 0.5, 0.5)]
+    quath[] qha = [(1, 0, 0, 0), (0, 1, 0, 0)]
+    quatd[] qda = [(1, 0, 0, 0)]
+    point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0.5, 0.25, 0.125)]
+    normal3h[] nh = [(0, 1, 0)]
+    color3f[] colors = [(1, 0, 0)] (
+        interpolation = "constant"
+    )
+    texCoord2f[] primvars:st = [(0, 0), (1, 1)] (
+        elementSize = 1
+        interpolation = "faceVarying"
+    )
+    int2[] i2a = [(1, 2), (3, 4)]
+    double3[] d3a = [(1, 2, 3)]
+    float3 xformOp:translate.timeSamples = {
+        1: (0, 0, 0),
+        2: (1, 2, 3),
+        3: None,
+        4: (4, 5, 6),
+    }
+    float xformOp:rotateY.timeSamples = {
+        1: 0,
+        2: 90,
+        3: 180,
+        4: 270,
+    }
+    float other.timeSamples = {
+        1: 1,
+        2: 2,
+        3: 3,
+        4: 4,
+    }
+    point3f[] animPoints.timeSamples = {
+        0.5: [(0, 0, 0), (1, 1, 1)],
+        1.5: [(2, 2, 2), (3, 3, 3)],
+    }
+    double both = 1
+    double both.timeSamples = {
+        0: 5,
+    }
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateY"]
+    rel material:binding = </World/Looks/Mat>
+    rel noTargets
+    prepend rel listRel = [</World/A>, </World/B>]
+    delete rel listRel = </World/C>
+    append rel listRel = </World/D>
+    custom rel customRel = None
+    color3f inputs:diffuseColor.connect = </World/Looks/Mat/Shader.outputs:rgb>
+    float connected = 1
+    prepend float connected.connect = </World/Looks/Mat/Shader.outputs:r>
+
+    def Scope "Looks"
+    {
+        def Material "Mat"
+        {
+            token outputs:surface.connect = </World/Looks/Mat/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                token outputs:surface
+                color3f outputs:rgb
+                float outputs:r
+            }
+        }
+    }
+
+    def Mesh "Mesh" (
+        active = false
+        instanceable = true
+    )
+    {
+        int[] faceVertexCounts = [3, 3]
+        int[] faceVertexIndices = [0, 1, 2, 0, 2, 3]
+        reorder properties = ["faceVertexIndices", "faceVertexCounts"]
+    }
+    reorder nameChildren = ["Mesh", "Looks"]
+    variantSet "shading" = {
+        "blue" (
+            customData = {
+                string v = "blue"
+            }
+        ) {
+            color3f color = (0, 0, 1)
+
+            over "Looks"
+            {
+                float inVariant = 2
+            }
+
+        }
+        "red" {
+            color3f color = (1, 0, 0)
+            variantSet "nested" = {
+                "a" {
+                    int deep = 1
+                }
+            }
+
+        }
+    }
+    variantSet "size" = {
+        "big" {
+        }
+        "small" {
+            double3 xformOp:scale = (0.5, 0.5, 0.5)
+        }
+    }
+}
+
+over "Over" (
+    payload = None
+    references = None
+)
+{
+}
+
+def "SinglePayload" (
+    payload = @./single.usda@
+)
+{
+}
+
+def "InternalPayload" (
+    payload = </World>
+)
+{
+}
+
+def "AppendRefs" (
+    append references = @./a.usda@ (
+        customData = {
+            string why = "because"
+        }
+    )
+    delete references = @./old.usda@
+    add apiSchemas = ["Added"]
+)
+{
+}

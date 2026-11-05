@@ -1,0 +1,15 @@
+#usda 1.0
+(
+    relocates = {
+        </A/B>: </A/C>
+    }
+)
+
+def "A" (
+    payload = @./p.usda@</P> (offset = 3; scale = 2)
+)
+{
+    pathExpression pe = "/A//*"
+    pathExpression[] pea = ["/A", "/B"]
+    timecode[] tc = [1, 2.5]
+}
