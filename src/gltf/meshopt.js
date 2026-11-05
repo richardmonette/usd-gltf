@@ -14,6 +14,10 @@ const BITS_V1 = [ 0, 1, 2, 4, 8 ];
 
 const fround = Math.fround;
 
+// 1 bit groups store their bits in reverse order
+const REVERSED = new Uint8Array( 256 );
+for ( let i = 0; i < 256; i ++ ) for ( let b = 0; b < 8; b ++ ) if ( i & ( 1 << b ) ) REVERSED[ i ] |= 0x80 >> b;
+
 function fail( message ) {
 
 	throw new Error( `usd-gltf: meshopt ${ message }` );
@@ -47,8 +51,7 @@ function decodeBytesGroup( data, pos, out, o, bits ) {
 
 		let byte = data[ pos + b ];
 
-		// 1 bit groups store their bits reversed relative to the other widths
-		if ( bits === 1 ) byte = ( ( byte * 0x0202020202 & 0x010884422010 ) % 1023 ) & 0xff;
+		if ( bits === 1 ) byte = REVERSED[ byte ];
 
 		for ( let k = 0; k < perByte; k ++ ) {
 
@@ -202,7 +205,8 @@ export function decodeVertexBuffer( target, count, size, source ) {
 	const end = source.length;
 	if ( end - 1 < tailPad ) fail( 'truncated vertex data' );
 
-	const last = source.slice( end - tailSize, end - tailSize + size );
+	// a copy (Buffer.slice would alias the input, which the decoder then overwrites)
+	const last = new Uint8Array( source.subarray( end - tailSize, end - tailSize + size ) );
 	const channels = version === 0 ? null : source.subarray( end - tailSize + size, end );
 	const blockSize = Math.min( ( BLOCK_SIZE_BYTES / size ) & ~ ( GROUP_SIZE - 1 ), BLOCK_MAX_SIZE );
 	const buffer = new Uint8Array( BLOCK_MAX_SIZE * 8 );

@@ -1,6 +1,7 @@
 // Reading glTF (json + external or embedded resources) and building new glTF assets.
 
 import { readGLB, writeGLB } from './glb.js';
+import { decodeMeshoptView } from './meshopt.js';
 
 const COMPONENT_ARRAYS = {
 	5120: Int8Array,
@@ -43,11 +44,14 @@ export class GLTFDocument {
 		this.buffers = buffers; // Uint8Array per json.buffers entry
 		this.images = images; // { bytes, mimeType, name } per json.images entry
 		this.accessorCache = new Map();
+		this.decodedViews = new Map(); // bufferView index -> bytes, for compressed views
 
 	}
 
 	bufferViewBytes( index ) {
 
+		const decoded = this.decodedViews.get( index );
+		if ( decoded ) return decoded;
 		const view = this.json.bufferViews[ index ];
 		const buffer = this.buffers[ view.buffer ];
 		return buffer.subarray( view.byteOffset || 0, ( view.byteOffset || 0 ) + view.byteLength );
@@ -194,6 +198,13 @@ export async function readGLTF( bytes, { resolver = null } = {} ) {
 	} ) );
 
 	const doc = new GLTFDocument( json, buffers, [] );
+
+	( json.bufferViews || [] ).forEach( ( view, i ) => {
+
+		const ext = view.extensions?.KHR_meshopt_compression || view.extensions?.EXT_meshopt_compression;
+		if ( ext ) doc.decodedViews.set( i, decodeMeshoptView( ext, buffers ) );
+
+	} );
 
 	doc.images = await Promise.all( ( json.images || [] ).map( async ( image ) => {
 
