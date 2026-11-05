@@ -1,7 +1,8 @@
 import { decodePNG, encodePNG } from './png.js';
 import { decodeJPEG } from './jpeg.js';
+import { decodeWebP } from './webp.js';
 
-export { decodePNG, encodePNG, decodeJPEG };
+export { decodePNG, encodePNG, decodeJPEG, decodeWebP };
 export { inflate, inflateZlib } from './inflate.js';
 export { deflate, deflateZlib } from './deflate.js';
 
@@ -37,7 +38,7 @@ export function imageMimeType( bytes ) {
 }
 
 /**
- * Decodes a PNG or JPEG. The format is sniffed from the bytes; mimeType is only a fallback.
+ * Decodes a PNG, JPEG or WebP. The format is sniffed from the bytes; mimeType is only a fallback.
  * @param {Uint8Array|ArrayBuffer} bytes
  * @param {string} [mimeType]
  * @returns {{ width: number, height: number, channels: number, bitDepth: number, data: Uint8Array|Uint16Array }}
@@ -49,6 +50,7 @@ export function decodeImage( bytes, mimeType ) {
 
 	if ( type === 'image/png' ) return decodePNG( bytes );
 	if ( type === 'image/jpeg' || type === 'image/jpg' ) return decodeJPEG( bytes );
+	if ( type === 'image/webp' ) return decodeWebP( bytes );
 	throw new Error( `usd-gltf: cannot decode ${ type || 'unknown' } image` );
 
 }
