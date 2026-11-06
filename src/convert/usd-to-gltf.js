@@ -6,6 +6,7 @@ import { getXformOps, evaluateOps, xformSampleTimes } from '../usd/xform.js';
 import { MaterialConverter, gltfTextureTransform } from './usd-material.js';
 import { triangulateMesh, normalizeNormals } from './usd-mesh.js';
 import { generateShape } from './usd-shapes.js';
+import { Budget } from '../limits.js';
 import { compose, decompose, identity, invert, isIdentity, multiply, normalMatrix, transformDirection, transformPoint } from '../util/math.js';
 
 const SKIP_TYPES = new Set( [ 'Material', 'Shader', 'NodeGraph', 'GeomSubset', 'SkelAnimation', 'BlendShape', 'RenderSettings', 'RenderProduct', 'RenderVar', 'GeometryLight', 'DomeLight', 'Backdrop' ] );
@@ -14,14 +15,15 @@ const SHAPE_TYPES = new Set( [ 'Cube', 'Sphere', 'Cylinder', 'Cone', 'Capsule', 
 
 export class USDToGLTF {
 
-	constructor( stage, { log = () => {}, materialVariants = true, debug = false, imageDecoder = null } = {} ) {
+	constructor( stage, { log = () => {}, materialVariants = true, debug = false, imageDecoder = null, budget = new Budget() } = {} ) {
 
 		this.stage = stage;
+		this.budget = budget;
 		this.log = log;
 		this.debug = debug; // records usd paths and time mapping in extras, for verification
 		this.materialVariants = materialVariants;
-		this.builder = new GLTFBuilder();
-		this.materials = new MaterialConverter( stage, this.builder, { log, imageDecoder } );
+		this.builder = new GLTFBuilder( 'usd-gltf', budget );
+		this.materials = new MaterialConverter( stage, this.builder, { log, imageDecoder, budget } );
 		this.json = this.builder.json;
 		this.meshCache = new Map();
 		this.primNodes = new Map(); // prim path -> node index (first instance)
@@ -101,6 +103,7 @@ export class USDToGLTF {
 
 	async convertPrim( prim, parentPrim ) {
 
+		this.budget.check();
 		if ( ! this.isRenderable( prim ) ) return null;
 
 		const node = { name: prim.name };
@@ -199,6 +202,7 @@ export class USDToGLTF {
 
 	async convertMesh( prim, nodeIndex ) {
 
+		this.budget.check();
 		const node = this.json.nodes[ nodeIndex ];
 		const skel = this.skinningFor( prim );
 
@@ -289,7 +293,7 @@ export class USDToGLTF {
 
 			const indices = data.vertexCount < 65536 ? Uint16Array.from( group.indices ) : Uint32Array.from( group.indices );
 			const primitive = { attributes: { ...attributes }, indices: this.builder.addAccessor( indices, 'SCALAR', { target: 34963 } ) };
-			const material = ( group.subset && this.boundMaterial( group.subset ) ) || this.defaultMaterial( prim ) || this.boundMaterial( prim );
+			const material = ( group.subset && ( this.defaultMaterial( group.subset ) || this.boundMaterial( group.subset ) ) ) || this.defaultMaterial( prim ) || this.boundMaterial( prim );
 
 			if ( material ) primitive.material = await this.materials.convert( material, { doubleSided, vertexColors } );
 			else primitive.material = this.materials.defaultMaterial( data.constantColor, data.constantOpacity, vertexColors, doubleSided );

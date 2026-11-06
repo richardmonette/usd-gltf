@@ -10,7 +10,7 @@ import { writeUSDC, CrateWriter } from '../src/usd/usdc/writer.js';
 import { compressBlock, decompressBlock, compressFast, decompressFast } from '../src/usd/usdc/lz4.js';
 import { compressInts32, decompressInts32, decodeInts64, encodeInts32 } from '../src/usd/usdc/intcompression.js';
 import { SPEC, TYPE, floatToHalf, halfToFloat } from '../src/usd/usdc/types.js';
-import { AssetPath, DICT_TYPES, ListOp, PrimSpec, PropertySpec, Reference } from '../src/usd/model.js';
+import { AssetPath, DICT_TYPES, Layer, ListOp, PrimSpec, PropertySpec, Reference } from '../src/usd/model.js';
 import { writeUSDA } from '../src/usd/usda/writer.js';
 
 const root = path.join( path.dirname( fileURLToPath( import.meta.url ) ), '..' );
@@ -675,5 +675,37 @@ test( 'readUSDC and writeUSDC match pxr on every Apple AR Quick Look layer', { s
 	}
 
 	assert.ok( layers >= files.length, `${ layers } layers in ${ files.length } files` );
+
+} );
+
+test( 'identical arrays are stored once', () => {
+
+	const layer = ( copies ) => {
+
+		const root = new PrimSpec( 'Mesh', 'def', 'Mesh' );
+		const points = Float32Array.from( { length: 3000 }, ( _, i ) => Math.sin( i ) );
+		for ( let i = 0; i < copies; i ++ ) {
+
+			const p = root.addProperty( new PropertySpec( 'primvars:copy' + i, 'attribute' ) );
+			p.typeName = 'float3[]';
+			p.default = i === copies - 1 ? points : Float32Array.from( points ); // equal values, separate arrays
+
+		}
+
+		const negative = root.addProperty( new PropertySpec( 'primvars:negativeZero', 'attribute' ) );
+		negative.typeName = 'float3[]';
+		negative.default = Float32Array.from( points, ( v, i ) => i === 0 ? - 0 : v ); // sin( 0 ) is +0
+		const l = new Layer();
+		l.root.children.set( 'Mesh', root );
+		return l;
+
+	};
+
+	const one = writeUSDC( layer( 1 ) ), four = writeUSDC( layer( 4 ) );
+	assert.ok( four.length - one.length < 1000, `${ one.length } vs ${ four.length }` );
+
+	const back = readUSDC( four ).root.children.get( 'Mesh' );
+	for ( let i = 0; i < 4; i ++ ) assert.equal( back.properties.get( 'primvars:copy' + i ).default.length, 3000 );
+	assert.ok( Object.is( back.properties.get( 'primvars:negativeZero' ).default[ 0 ], - 0 ), 'values differing only by -0 are kept apart' );
 
 } );

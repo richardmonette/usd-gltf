@@ -9,6 +9,7 @@
 import { decodeImageAsync, encodePNG, encodePNGAsync, imageMimeType, isGreyscaleImage } from '../image/index.js';
 import { multiply } from '../util/math.js';
 import { resolveAssetPath } from '../usd/stage.js';
+import { Budget, rethrowFatal } from '../limits.js';
 
 const WRAP = { repeat: 10497, mirror: 33648, clamp: 33071, black: 33071 };
 const CHANNEL = { r: 0, g: 1, b: 2, a: 3, x: 0, y: 1, z: 2, w: 3 };
@@ -68,9 +69,10 @@ function binary( a, b, op ) {
 
 export class MaterialConverter {
 
-	constructor( stage, builder, { log = () => {}, imageDecoder = null } = {} ) {
+	constructor( stage, builder, { log = () => {}, imageDecoder = null, budget = new Budget() } = {} ) {
 
 		this.stage = stage;
+		this.budget = budget;
 		this.builder = builder;
 		this.log = log;
 		this.imageDecoder = imageDecoder;
@@ -467,6 +469,7 @@ export class MaterialConverter {
 
 		} catch ( e ) {
 
+			rethrowFatal( e, this.budget );
 			this.log( `texture ${ file }: ${ e.message }` );
 
 		}
@@ -498,10 +501,11 @@ export class MaterialConverter {
 
 				try {
 
-					return await decodeImageAsync( await this.stage.readAsset( file ), undefined, this.imageDecoder );
+					return await decodeImageAsync( await this.stage.readAsset( file ), undefined, this.imageDecoder, this.budget );
 
 				} catch ( e ) {
 
+					rethrowFatal( e, this.budget );
 					this.log( `decode ${ file }: ${ e.message }` );
 					return null;
 
@@ -680,6 +684,7 @@ export class MaterialConverter {
 	 */
 	async convert( material, { doubleSided = false, vertexColors = false, variant = '' } = {} ) {
 
+		this.budget.check();
 		const key = material.path + ( doubleSided ? '|ds' : '' ) + ( variant ? '|' + variant : '' );
 		if ( this.materials.has( key ) ) return this.materials.get( key );
 

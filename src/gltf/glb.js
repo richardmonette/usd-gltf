@@ -68,13 +68,13 @@ export function readGLB( data ) {
 
 /**
  * Packs glTF JSON and an optional binary buffer into a GLB.
- * @param {object} json
+ * @param {object|Uint8Array} json the glTF JSON, or it already encoded as UTF-8
  * @param {Uint8Array|null} [bin]
  * @returns {Uint8Array}
  */
 export function writeGLB( json, bin = null ) {
 
-	const jsonBytes = encoder.encode( JSON.stringify( json ) );
+	const jsonBytes = json instanceof Uint8Array ? json : encoder.encode( JSON.stringify( json ) );
 	const jsonLength = pad4( jsonBytes.byteLength );
 	const binLength = bin ? pad4( bin.byteLength ) : 0;
 

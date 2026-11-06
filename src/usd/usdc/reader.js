@@ -4,6 +4,7 @@
 import { AssetPath, DICT_TYPES, Layer, ListOp, PrimSpec, PropertySpec, Reference } from '../model.js';
 import { decompressFast } from './lz4.js';
 import { decompressInts32, decompressInts64 } from './intcompression.js';
+import { Budget, checkSize } from '../../limits.js';
 import { PERMISSIONS, POD, SCALAR_SIZE, SPEC, SPECIFIERS, TYPE, TYPE_NAMES, halfArrayToFloat32, halfToFloat, isMatrixType, isVecType } from './types.js';
 
 const IS_ARRAY = 0x80000000;
@@ -42,9 +43,10 @@ const V0_8_0 = version( 0, 8, 0 );
 
 class CrateReader {
 
-	constructor( bytes ) {
+	constructor( bytes, budget = new Budget() ) {
 
 		this.bytes = bytes;
+		this.budget = budget;
 		this.view = new DataView( bytes.buffer, bytes.byteOffset, bytes.byteLength );
 		this.pos = 0;
 		this.timesCache = new Map();
@@ -136,7 +138,7 @@ class CrateReader {
 
 	take( n ) {
 
-		if ( this.pos + n > this.bytes.length ) throw new Error( 'usd-gltf: truncated usdc file' );
+		if ( ! Number.isSafeInteger( n ) || n < 0 || this.pos + n > this.bytes.length ) throw new Error( 'usd-gltf: truncated usdc file' );
 		const b = this.bytes.subarray( this.pos, this.pos + n );
 		this.pos += n;
 		return b;
@@ -145,8 +147,37 @@ class CrateReader {
 
 	compressedInts( n ) {
 
-		const size = this.u64();
-		return decompressInts32( this.take( size ), n );
+		const data = this.take( this.u64() );
+		this.decodedInts( n, 4, data );
+		return decompressInts32( data, n );
+
+	}
+
+	// Sizes come from the file, so they are checked before allocating. Compressed integers take at
+	// least 2 bits each before LZ4, which shrinks data at most 255 times.
+	decodedInts( n, size, data ) {
+
+		checkSize( n * size, 'usdc' );
+		if ( n > data.length * 1024 + 64 ) throw new Error( 'usd-gltf: corrupt compressed integers in usdc file' );
+		this.budget.decode( n * size * 2, 'usdc' ); // the encoded buffer and the decoded integers
+
+	}
+
+	lz4( data, size ) {
+
+		checkSize( size, 'usdc' );
+		if ( size > data.length * 256 + 64 ) throw new Error( 'usd-gltf: corrupt compressed data in usdc file' );
+		this.budget.decode( size, 'usdc' );
+		return decompressFast( data, size );
+
+	}
+
+	// count fixed size records at this.pos, which must all be in the file
+	records( count, size ) {
+
+		checkSize( count * size, 'usdc' );
+		if ( this.pos + count * size > this.bytes.length ) throw new Error( 'usd-gltf: truncated usdc file' );
+		this.budget.decode( count * size, 'usdc' );
 
 	}
 
@@ -176,7 +207,7 @@ class CrateReader {
 
 			const uncompressedSize = this.u64();
 			const compressedSize = this.u64();
-			chars = decompressFast( this.take( compressedSize ), uncompressedSize );
+			chars = this.lz4( this.take( compressedSize ), uncompressedSize );
 
 		}
 
@@ -213,6 +244,7 @@ class CrateReader {
 
 		if ( this.version < V0_4_0 ) {
 
+			this.records( count, 16 );
 			this.fieldTokens = new Uint32Array( count );
 			this.fieldReps = new Uint32Array( count * 2 );
 
@@ -229,7 +261,7 @@ class CrateReader {
 
 			this.fieldTokens = new Uint32Array( this.compressedInts( count ).buffer );
 			const repsSize = this.u64();
-			const reps = decompressFast( this.take( repsSize ), count * 8 );
+			const reps = this.lz4( this.take( repsSize ), count * 8 );
 			this.fieldReps = new Uint32Array( reps.buffer, 0, count * 2 );
 
 		}
@@ -245,6 +277,7 @@ class CrateReader {
 
 		if ( this.version < V0_4_0 ) {
 
+			this.records( count, 4 );
 			this.fieldSets = new Uint32Array( count );
 			for ( let i = 0; i < count; i ++ ) this.fieldSets[ i ] = this.u32();
 
@@ -263,16 +296,27 @@ class CrateReader {
 		if ( ! this.section( 'PATHS' ) ) return;
 
 		const numPaths = this.u64();
-		this.paths = new Array( numPaths ).fill( '' );
-		this.pathInfo = new Array( numPaths ).fill( null );
+		const allocate = () => {
+
+			this.budget.decode( numPaths * 16, 'usdc' );
+			this.paths = new Array( numPaths ).fill( '' );
+			this.pathInfo = new Array( numPaths ).fill( null );
+
+		};
 
 		if ( this.version < V0_4_0 ) {
 
-			this.readPathTree( this.version === version( 0, 0, 1 ) ? 16 : 12 );
+			const entry = this.version === version( 0, 0, 1 ) ? 16 : 12;
+			this.records( numPaths, entry ); // a tree entry per path
+			allocate();
+			this.readPathTree( entry );
 
 		} else {
 
 			const n = this.u64();
+			// the tree holds every path, sometimes leaving out an unused first slot
+			if ( ! Number.isSafeInteger( numPaths ) || numPaths > n + 1 ) throw new Error( 'usd-gltf: corrupt path table in usdc file' );
+			allocate();
 			const pathIndexes = this.compressedInts( n );
 			const elementTokens = this.compressedInts( n );
 			const jumps = this.compressedInts( n );
@@ -405,6 +449,7 @@ class CrateReader {
 		if ( this.version < V0_4_0 ) {
 
 			const pad = this.version === version( 0, 0, 1 ) ? 4 : 0;
+			this.records( count, 12 + pad );
 			this.specPaths = new Uint32Array( count );
 			this.specFieldSets = new Uint32Array( count );
 			this.specTypes = new Uint32Array( count );
@@ -591,6 +636,7 @@ class CrateReader {
 	readVector( item ) {
 
 		const n = this.u64();
+		this.records( n, 1 ); // every item takes at least a byte
 		const out = new Array( n );
 		for ( let i = 0; i < n; i ++ ) out[ i ] = item();
 		return out;
@@ -731,8 +777,8 @@ class CrateReader {
 
 			if ( compressed && pod[ 1 ] === 1 && n >= MIN_COMPRESSED_ARRAY_SIZE && ( kind === 'i32' || kind === 'u32' || kind === 'i64' || kind === 'u64' ) && this.version >= V0_5_0 ) {
 
-				const size = this.u64();
-				const data = this.take( size );
+				const data = this.take( this.u64() );
+				this.decodedInts( n, kind === 'i32' || kind === 'u32' ? 4 : 8, data );
 				if ( kind === 'i32' ) out = decompressInts32( data, n );
 				else if ( kind === 'u32' ) out = new Uint32Array( decompressInts32( data, n ).buffer );
 				else out = decompressInts64( data, n, kind === 'u64' );
@@ -769,6 +815,7 @@ class CrateReader {
 
 	readArrayItems( n, item ) {
 
+		this.records( n, 4 );
 		const out = new Array( n );
 		for ( let i = 0; i < n; i ++ ) out[ i ] = item();
 		return out;
@@ -778,6 +825,7 @@ class CrateReader {
 	readRawArray( kind, count ) {
 
 		const size = SCALAR_SIZE[ kind ];
+		this.records( count, kind === 'f16' || kind === 'i64' || kind === 'u64' ? size * 3 : size ); // and any widened copy
 		const bytes = this.take( count * size ).slice(); // copy, also aligns
 
 		switch ( kind ) {
@@ -812,6 +860,8 @@ class CrateReader {
 	readCompressedFloats( kind, n ) {
 
 		const code = this.u8();
+		checkSize( n * 8, 'usdc' );
+		this.budget.decode( n * ( kind === 'f64' ? 8 : 4 ), 'usdc' );
 		const out = typedArrayFor( kind, n );
 
 		if ( code === 105 ) { // 'i': integers
@@ -912,11 +962,11 @@ function payloadListOp( value ) {
  * @param {string} [identifier]
  * @returns {Layer}
  */
-export function readUSDC( data, identifier = 'anon.usdc' ) {
+export function readUSDC( data, identifier = 'anon.usdc', { budget = new Budget() } = {} ) {
 
 	// a plain view, so subarray().slice() copies even for a Node Buffer
 	const bytes = ArrayBuffer.isView( data ) ? new Uint8Array( data.buffer, data.byteOffset, data.byteLength ) : new Uint8Array( data );
-	const crate = new CrateReader( bytes );
+	const crate = new CrateReader( bytes, budget );
 	const layer = new Layer( identifier );
 
 	const specs = new Map(); // path index -> { type, object, order }

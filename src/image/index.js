@@ -66,6 +66,54 @@ export function isGreyscaleImage( bytes ) {
 }
 
 /**
+ * Width, height and bytes per pixel of a PNG, JPEG or WebP from its header, or null.
+ * @param {Uint8Array} bytes
+ * @returns {{ width: number, height: number, pixelBytes: number }|null}
+ */
+export function imageSize( bytes ) {
+
+	bytes = toBytes( bytes );
+	const type = imageMimeType( bytes );
+	const be16 = ( o ) => ( bytes[ o ] << 8 ) | bytes[ o + 1 ];
+	const le16 = ( o ) => bytes[ o ] | ( bytes[ o + 1 ] << 8 );
+	const le24 = ( o ) => le16( o ) | ( bytes[ o + 2 ] << 16 );
+
+	if ( type === 'image/png' && bytes.length >= 26 ) {
+
+		const width = ( be16( 16 ) * 65536 ) + be16( 18 ), height = ( be16( 20 ) * 65536 ) + be16( 22 );
+		return { width, height, pixelBytes: bytes[ 24 ] === 16 ? 8 : 4 };
+
+	}
+
+	if ( type === 'image/jpeg' ) {
+
+		for ( let o = 2; o + 9 < bytes.length; ) {
+
+			if ( bytes[ o ] !== 0xFF ) return null;
+			const marker = bytes[ o + 1 ];
+			if ( marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC ) return { width: be16( o + 7 ), height: be16( o + 5 ), pixelBytes: 4 };
+			o += 2 + be16( o + 2 );
+
+		}
+
+		return null;
+
+	}
+
+	if ( type === 'image/webp' && bytes.length >= 30 ) {
+
+		const chunk = String.fromCharCode( bytes[ 12 ], bytes[ 13 ], bytes[ 14 ], bytes[ 15 ] );
+		if ( chunk === 'VP8X' ) return { width: le24( 24 ) + 1, height: le24( 27 ) + 1, pixelBytes: 4 };
+		if ( chunk === 'VP8 ' ) return { width: le16( 26 ) & 0x3FFF, height: le16( 28 ) & 0x3FFF, pixelBytes: 4 };
+		if ( chunk === 'VP8L' ) { const b = bytes[ 21 ] | ( bytes[ 22 ] << 8 ) | ( bytes[ 23 ] << 16 ) | ( bytes[ 24 ] << 24 ); return { width: ( b & 0x3FFF ) + 1, height: ( ( b >>> 14 ) & 0x3FFF ) + 1, pixelBytes: 4 }; }
+
+	}
+
+	return null;
+
+}
+
+/**
  * Decodes a PNG, JPEG or WebP. The format is sniffed from the bytes; mimeType is only a fallback.
  * @param {Uint8Array|ArrayBuffer} bytes
  * @param {string} [mimeType]
@@ -141,10 +189,13 @@ export async function encodePNGAsync( image ) {
  * @param {Uint8Array} bytes
  * @param {string} [mimeType]
  * @param {( bytes: Uint8Array, mimeType?: string ) => Promise<object>|object} [decoder] overrides both
+ * @param {import('../limits.js').Budget} [budget] charged with the decoded size, from the header, before decoding
  */
-export async function decodeImageAsync( bytes, mimeType, decoder = null ) {
+export async function decodeImageAsync( bytes, mimeType, decoder = null, budget = null ) {
 
 	bytes = toBytes( bytes );
+	const size = budget && imageSize( bytes );
+	if ( size ) budget.decode( size.width * size.height * size.pixelBytes, 'image' );
 	if ( decoder ) return decoder( bytes, mimeType );
 	const type = imageMimeType( bytes ) || mimeType;
 

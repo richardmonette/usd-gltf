@@ -35,7 +35,27 @@ USD to glTF composes the stage first (sublayers, references, payloads, inherits,
 - Material variant sets as `KHR_materials_variants`, animation variant sets as separate glTF animations
 - Cameras, UsdLux lights as `KHR_lights_punctual`, PointInstancers
 
-glTF to USD writes `UsdPreviewSurface` materials, UsdSkel skins and blend shapes, time sampled animation, variant sets for material variants and multiple animations, cameras and lights. glTF features that `UsdPreviewSurface` can't express (transmission, sheen, iridescence, ...) are kept in the material's `customData`, so converting back to glTF is lossless.
+glTF to USD writes `UsdPreviewSurface` materials, UsdSkel skins and blend shapes, time sampled animation, variant sets for material variants and multiple animations, cameras and lights. glTF features that `UsdPreviewSurface` can't express (transmission, sheen, iridescence, ...) are kept in the material's `customData`, so converting back to glTF is lossless. Primitives of a mesh that share their vertex data become one USD Mesh with a GeomSubset per primitive, and each Mesh keeps only the vertices it uses, so vertex data is never repeated per primitive.
+
+glTF compression: meshopt (`EXT_meshopt_compression`, `KHR_meshopt_compression`) and `KHR_mesh_quantization` are decoded. Draco (`KHR_draco_mesh_compression`) and KTX2 textures (`KHR_texture_basisu`) are not: when an asset lists them in `extensionsRequired` the conversion fails with an error naming them, and when they are optional the uncompressed fallback data is used.
+
+## Limits
+
+Input size alone doesn't bound how much memory a conversion needs: an accessor can declare millions of vertices with no data behind them, and compressed geometry and images expand when decoded. Both directions take opt-in limits:
+
+```js
+const usdz = await glbToUSD( glb, {
+	maxDecodedBytes: 512 * 2 ** 20, // decoded data held during the conversion
+	maxOutputBytes: 256 * 2 ** 20, // any output buffer: the layer, the usdz or glb, as it grows
+	signal: AbortSignal.timeout( 30000 ), // cancellation
+} );
+```
+
+- `maxDecodedBytes` counts, before each allocation: glTF accessors (including ones without a bufferView) and meshopt decoding; USD crate arrays, compressed sections and zip entries; images, from the size in their header; and the arrays written into the converted USD layer, so data referenced many times is counted every time it is written. It is not a limit on the whole process's memory: the input, its parsed JSON or USD text, and other transient copies aren't counted.
+- `maxOutputBytes` is checked as the usdc, usda and glb writers grow and before the final usdz or glb buffer is allocated.
+- `signal` is checked between prims, nodes, meshes, materials and layers. A cancelled conversion rejects with the signal's reason and returns nothing. To stop work that is in a single long step, run the conversion in a worker and terminate it.
+
+Going over a limit rejects with a `ConversionLimitError` whose `stage`, `resource` (`'decoded'` or `'output'`), `limit` and `attempted` say what was too big; it never includes input data or file names. Without limits nothing changes. Sizes that can't be right (an accessor reading past its bufferView, a count too big to allocate, a zip entry inflating past its stated size) are rejected whatever the limits.
 
 ## Conformance
 

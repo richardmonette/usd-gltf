@@ -219,7 +219,7 @@ export function decodePNG( bytes ) {
 
 	}
 
-	const raw = inflateZlib( zdata, expected );
+	const raw = inflateZlib( zdata, expected, expected * 2 + 1024 ); // tolerates trailing data, not a decompression bomb
 	if ( raw.length < expected ) throw new Error( 'usd-gltf: PNG image data is truncated' );
 
 	const channels = colorType === 3 ? ( trns !== null ? 4 : 3 ) : samples + ( trns !== null ? 1 : 0 );

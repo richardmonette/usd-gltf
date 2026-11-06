@@ -14,6 +14,7 @@
 import { AssetPath, Layer, ListOp, PrimSpec, PropertySpec } from '../usd/model.js';
 import { compose, decompose, identity, invert, multiply } from '../util/math.js';
 import { decodeImageAsync, encodePNG, imageMimeType } from '../image/index.js';
+import { rethrowFatal } from '../limits.js';
 
 const MODES = { POINTS: 0, LINES: 1, LINE_LOOP: 2, LINE_STRIP: 3, TRIANGLES: 4, TRIANGLE_STRIP: 5, TRIANGLE_FAN: 6 };
 const WRAP = { 10497: 'repeat', 33648: 'mirror', 33071: 'clamp' };
@@ -33,8 +34,9 @@ function sanitize( name, fallback ) {
 
 class Builder {
 
-	constructor() {
+	constructor( budget ) {
 
+		this.budget = budget;
 		this.layer = new Layer( 'root.usda' );
 		this.paths = new Map(); // PrimSpec -> path
 
@@ -65,6 +67,8 @@ class Builder {
 
 	attr( prim, name, typeName, value, { interpolation, uniform = false, metadata = {}, timeSamples = null, custom = false } = {} ) {
 
+		// arrays authored in the layer count as decoded data: they live until the layer is written
+		if ( ArrayBuffer.isView( value ) ) this.budget.decode( value.byteLength, 'usd layer' );
 		const p = prim.addProperty( new PropertySpec( name, 'attribute' ) );
 		p.typeName = typeName;
 		if ( value !== undefined ) p.default = value;
@@ -110,17 +114,20 @@ export class GLTFToUSD {
 
 		this.doc = doc;
 		this.json = doc.json;
+		this.budget = doc.budget;
 		this.log = log;
 		this.textureDir = textureDir;
 		this.imageDecoder = imageDecoder;
 		this.bakeNormalScale = bakeNormalScale;
 		this.debug = debug; // returns the node/primitive -> prim path mapping, for verification
-		this.b = new Builder();
+		this.b = new Builder( this.budget );
 		this.files = []; // { name, data } for the package
 		this.imageFiles = new Map(); // image index -> path | null
 		this.materialPaths = new Map(); // material index (or 'default') -> path
 		this.nodePrims = new Map(); // node index -> prim spec
 		this.meshPrims = new Map(); // `${node}/${primitive}` -> prim spec
+		this.bindingPrims = new Map(); // `${node}/${primitive}` -> prim spec its material binds to (the mesh or a GeomSubset)
+		this.vertexOrders = new Map(); // prim spec -> glTF vertex index per USD point, when compacted
 		this.jointNodes = new Set();
 		this.timeCodes = new Set();
 
@@ -199,11 +206,12 @@ export class GLTFToUSD {
 				// usdz packages may only hold png and jpeg images
 				try {
 
-					bytes = encodePNG( await decodeImageAsync( bytes, mime, this.imageDecoder ) );
+					bytes = encodePNG( await decodeImageAsync( bytes, mime, this.imageDecoder, this.budget ) );
 					mime = 'image/png';
 
 				} catch ( e ) {
 
+					rethrowFatal( e, this.budget );
 					this.log( `image ${ index }: ${ e.message }` );
 					bytes = null;
 
@@ -238,7 +246,7 @@ export class GLTFToUSD {
 
 		try {
 
-			const img = await decodeImageAsync( image.bytes, image.mimeType, this.imageDecoder );
+			const img = await decodeImageAsync( image.bytes, image.mimeType, this.imageDecoder, this.budget );
 			const max = img.bitDepth === 16 ? 65535 : 255;
 			const out = new Uint8Array( img.width * img.height * 3 );
 
@@ -261,6 +269,7 @@ export class GLTFToUSD {
 
 		} catch ( e ) {
 
+			rethrowFatal( e, this.budget );
 			this.log( `normal map ${ source }: ${ e.message }` );
 
 		}
@@ -275,7 +284,8 @@ export class GLTFToUSD {
 		const texture = this.json.textures?.[ textureIndex ];
 		if ( ! texture ) return undefined;
 		const ext = texture.extensions || {};
-		return ext.KHR_texture_basisu?.source ?? ext.EXT_texture_webp?.source ?? ext.EXT_texture_avif?.source ?? texture.source;
+		// KTX2 can't be decoded, so an optional basisu texture uses its fallback
+		return ext.EXT_texture_webp?.source ?? ext.EXT_texture_avif?.source ?? texture.source ?? ext.KHR_texture_basisu?.source;
 
 	}
 
@@ -323,6 +333,7 @@ export class GLTFToUSD {
 
 	async convertMaterial( material, index ) {
 
+		this.budget.check();
 		const b = this.b;
 		const m = b.def( this.materialScope, sanitize( material.name, 'material' ), 'Material' );
 		const mPath = b.path( m );
@@ -572,6 +583,7 @@ export class GLTFToUSD {
 
 	convertNode( index, parent ) {
 
+		this.budget.check();
 		const node = this.json.nodes[ index ];
 		const b = this.b;
 		if ( this.jointNodes.has( index ) && ! this.hasContent( index ) ) return null;
@@ -664,22 +676,31 @@ export class GLTFToUSD {
 		const node = this.json.nodes[ nodeIndex ];
 		const mesh = this.json.meshes[ node.mesh ];
 		const skinned = node.skin !== undefined;
-		const instancing = node.extensions?.EXT_mesh_gpu_instancing;
+		const instancing = node.extensions?.EXT_mesh_gpu_instancing && ! skinned;
+		const groups = instancing ? mesh.primitives.map( ( _, p ) => [ p ] ) : this.primitiveGroups( mesh );
 
-		mesh.primitives.forEach( ( primitive, p ) => {
+		groups.forEach( ( group ) => {
 
-			const name = sanitize( mesh.primitives.length > 1 ? `${ mesh.name || 'mesh' }_${ p }` : mesh.name, `mesh_${ node.mesh }` );
+			const p = group[ 0 ];
+			const primitive = mesh.primitives[ p ];
+			const name = sanitize( groups.length > 1 ? `${ mesh.name || 'mesh' }_${ p }` : mesh.name, `mesh_${ node.mesh }` );
 
-			if ( instancing && ! skinned ) {
+			if ( instancing ) {
 
-				this.convertInstancer( prim, name, primitive, instancing, nodeIndex, p );
+				this.convertInstancer( prim, name, primitive, node.extensions.EXT_mesh_gpu_instancing, nodeIndex, p );
 				return;
 
 			}
 
-			const meshPrim = this.convertPrimitive( prim, name, primitive, { nodeIndex, joints: skinned } );
+			const meshPrim = this.convertPrimitive( prim, name, primitive, { nodeIndex, joints: skinned, group: group.map( ( q ) => mesh.primitives[ q ] ) } );
 			if ( ! meshPrim ) return;
-			this.meshPrims.set( `${ nodeIndex }/${ p }`, meshPrim );
+
+			group.forEach( ( q, k ) => {
+
+				this.meshPrims.set( `${ nodeIndex }/${ q }`, meshPrim );
+				this.bindingPrims.set( `${ nodeIndex }/${ q }`, group.length > 1 ? meshPrim.children.get( `primitive_${ k }` ) : meshPrim );
+
+			} );
 
 			// skins are bound once skeletons exist; morph only meshes get a rigid one joint skeleton
 			if ( skinned ) ( this.pendingSkinned ||= [] ).push( { nodeIndex, primitive, p, meshPrim } );
@@ -690,9 +711,32 @@ export class GLTFToUSD {
 	}
 
 	/**
-	 * Writes one glTF primitive as a Mesh, Points or BasisCurves prim.
+	 * Groups a mesh's primitives that share all vertex data, so each group becomes one USD Mesh
+	 * with a GeomSubset per primitive (how USD -> glTF splits a mesh by material).
+	 * @returns {number[][]} primitive indices
 	 */
-	convertPrimitive( parent, name, primitive, { nodeIndex, joints = null } = {} ) {
+	primitiveGroups( mesh ) {
+
+		const groups = new Map();
+
+		mesh.primitives.forEach( ( q, p ) => {
+
+			const triangles = ( q.mode ?? MODES.TRIANGLES ) >= MODES.TRIANGLES && q.indices !== undefined && q.attributes.POSITION !== undefined;
+			const doubleSided = !! this.json.materials?.[ q.material ]?.doubleSided;
+			const key = triangles ? JSON.stringify( [ Object.entries( q.attributes ).sort(), q.targets ?? null, doubleSided ] ) : p;
+			( groups.get( key ) || groups.set( key, [] ).get( key ) ).push( p );
+
+		} );
+
+		return [ ...groups.values() ];
+
+	}
+
+	/**
+	 * Writes one glTF primitive as a Mesh, Points or BasisCurves prim. Triangle primitives sharing
+	 * vertex data (group) become one Mesh with a GeomSubset each. Unreferenced vertices are dropped.
+	 */
+	convertPrimitive( parent, name, primitive, { nodeIndex, joints = null, group = [ primitive ] } = {} ) {
 
 		const doc = this.doc;
 		const b = this.b;
@@ -750,57 +794,72 @@ export class GLTFToUSD {
 		}
 
 		// triangles; strips and fans are expanded
-		let tris = indices;
+		const parts = group.map( ( q ) => q === primitive ? triangleList( indices, mode ) : triangleList( doc.getAccessor( q.indices ).array, q.mode ?? MODES.TRIANGLES ) );
+		let tris = parts[ 0 ];
 
-		if ( mode === MODES.TRIANGLE_STRIP ) {
+		if ( parts.length > 1 ) {
 
-			const out = [];
-			for ( let i = 0; i + 2 < indices.length; i ++ ) {
-
-				if ( i % 2 === 0 ) out.push( indices[ i ], indices[ i + 1 ], indices[ i + 2 ] );
-				else out.push( indices[ i + 1 ], indices[ i ], indices[ i + 2 ] );
-
-			}
-
-			tris = Uint32Array.from( out );
-
-		} else if ( mode === MODES.TRIANGLE_FAN ) {
-
-			const out = [];
-			for ( let i = 1; i + 1 < indices.length; i ++ ) out.push( indices[ 0 ], indices[ i ], indices[ i + 1 ] );
-			tris = Uint32Array.from( out );
+			tris = new Uint32Array( parts.reduce( ( n, t ) => n + t.length, 0 ) );
+			parts.reduce( ( at, t ) => ( tris.set( t, at ), at + t.length ), 0 );
 
 		}
 
-		tris = tris.subarray( 0, tris.length - ( tris.length % 3 ) );
+		// keep only referenced vertices, in their original order
+		const order = vertexOrder( tris, count );
+		if ( order ) tris = remapIndices( tris, order, count );
+		const pick = ( array, size ) => order ? gather( array, size, order ) : array;
+		const points = pick( positions, 3 );
+
 		const prim = b.def( parent, name, 'Mesh' );
-		b.attr( prim, 'points', 'point3f[]', positions );
+		b.attr( prim, 'points', 'point3f[]', points );
 		b.attr( prim, 'faceVertexCounts', 'int[]', new Int32Array( tris.length / 3 ).fill( 3 ) );
 		b.attr( prim, 'faceVertexIndices', 'int[]', Int32Array.from( tris ) );
-		b.attr( prim, 'extent', 'float3[]', extent( positions ) );
+		b.attr( prim, 'extent', 'float3[]', extent( points ) );
 		b.attr( prim, 'subdivisionScheme', 'token', 'none', { uniform: true } );
+		if ( order ) this.vertexOrders.set( prim, order );
 
-		if ( attrs.NORMAL !== undefined ) b.attr( prim, 'normals', 'normal3f[]', doc.getFloats( attrs.NORMAL ).array, { interpolation: 'vertex' } );
+		if ( attrs.NORMAL !== undefined ) b.attr( prim, 'normals', 'normal3f[]', pick( doc.getFloats( attrs.NORMAL ).array, 3 ), { interpolation: 'vertex' } );
 
 		for ( let i = 0; attrs[ 'TEXCOORD_' + i ] !== undefined; i ++ ) {
 
-			const uv = doc.getFloats( attrs[ 'TEXCOORD_' + i ] ).array;
+			const uv = pick( doc.getFloats( attrs[ 'TEXCOORD_' + i ] ).array, 2 );
 			const st = new Float32Array( uv.length );
 			for ( let k = 0; k < uv.length; k += 2 ) { st[ k ] = uv[ k ]; st[ k + 1 ] = 1 - uv[ k + 1 ]; }
 			b.attr( prim, i ? `primvars:st${ i }` : 'primvars:st', 'texCoord2f[]', st, { interpolation: 'vertex' } );
 
 		}
 
-		if ( attrs.TANGENT !== undefined ) b.attr( prim, 'primvars:tangents', 'float4[]', doc.getFloats( attrs.TANGENT ).array, { interpolation: 'vertex' } );
+		if ( attrs.TANGENT !== undefined ) b.attr( prim, 'primvars:tangents', 'float4[]', pick( doc.getFloats( attrs.TANGENT ).array, 4 ), { interpolation: 'vertex' } );
 
-		this.writeColors( prim, attrs, null, 'vertex' );
+		this.writeColors( prim, attrs, order, 'vertex' );
 		if ( attrs.COLOR_0 !== undefined ) gltfData( prim ).color0 = true;
 
 		const material = primitive.material !== undefined ? this.json.materials[ primitive.material ] : null;
 		if ( material?.doubleSided ) b.attr( prim, 'doubleSided', 'bool', true, { uniform: true } );
-		this.bindMaterial( prim, primitive.material );
 
-		if ( joints ) this.writeSkinWeights( prim, attrs, joints );
+		if ( group.length === 1 ) {
+
+			this.bindMaterial( prim, primitive.material );
+
+		} else {
+
+			b.attr( prim, 'subsetFamily:materialBind:familyType', 'token', 'partition', { uniform: true } );
+			let face = 0;
+
+			parts.forEach( ( t, k ) => {
+
+				const subset = b.def( prim, `primitive_${ k }`, 'GeomSubset' );
+				b.attr( subset, 'elementType', 'token', 'face', { uniform: true } );
+				b.attr( subset, 'familyName', 'token', 'materialBind', { uniform: true } );
+				b.attr( subset, 'indices', 'int[]', Int32Array.from( { length: t.length / 3 }, ( _, i ) => face + i ) );
+				face += t.length / 3;
+				this.bindMaterial( subset, group[ k ].material );
+
+			} );
+
+		}
+
+		if ( joints ) this.writeSkinWeights( prim, attrs, joints, order );
 
 		void nodeIndex;
 		return prim;
@@ -865,10 +924,11 @@ export class GLTFToUSD {
 
 	// --- skins and morph targets ---
 
-	writeSkinWeights( prim, attrs, joints ) {
+	writeSkinWeights( prim, attrs, joints, order = null ) {
 
+		const pick = ( array ) => order ? gather( array, 4, order ) : array;
 		const sets = [];
-		for ( let s = 0; attrs[ 'JOINTS_' + s ] !== undefined; s ++ ) sets.push( [ this.doc.getAccessor( attrs[ 'JOINTS_' + s ], { normalize: false } ).array, this.doc.getFloats( attrs[ 'WEIGHTS_' + s ] ).array ] );
+		for ( let s = 0; attrs[ 'JOINTS_' + s ] !== undefined; s ++ ) sets.push( [ pick( this.doc.getAccessor( attrs[ 'JOINTS_' + s ], { normalize: false } ).array ), pick( this.doc.getFloats( attrs[ 'WEIGHTS_' + s ] ).array ) ] );
 		if ( ! sets.length ) return;
 
 		const n = sets[ 0 ][ 0 ].length / 4;
@@ -907,14 +967,16 @@ export class GLTFToUSD {
 		const b = this.b;
 		const targets = [];
 		const shapeNames = [];
+		const order = this.vertexOrders.get( meshPrim );
+		const pick = ( array ) => order ? gather( array, 3, order ) : array;
 
 		primitive.targets.forEach( ( target, i ) => {
 
 			const name = sanitize( names?.[ i ], `target_${ i }` );
 			const shape = b.def( meshPrim, name, 'BlendShape' );
-			const count = this.doc.json.accessors[ primitive.attributes.POSITION ].count;
-			b.attr( shape, 'offsets', 'vector3f[]', target.POSITION !== undefined ? this.doc.getFloats( target.POSITION ).array : new Float32Array( count * 3 ), { uniform: true } );
-			if ( target.NORMAL !== undefined ) b.attr( shape, 'normalOffsets', 'vector3f[]', this.doc.getFloats( target.NORMAL ).array, { uniform: true } );
+			const count = order ? order.length : this.doc.json.accessors[ primitive.attributes.POSITION ].count;
+			b.attr( shape, 'offsets', 'vector3f[]', target.POSITION !== undefined ? pick( this.doc.getFloats( target.POSITION ).array ) : new Float32Array( count * 3 ), { uniform: true } );
+			if ( target.NORMAL !== undefined ) b.attr( shape, 'normalOffsets', 'vector3f[]', pick( this.doc.getFloats( target.NORMAL ).array ), { uniform: true } );
 			targets.push( b.path( shape ) );
 			shapeNames.push( shape.name );
 
@@ -1648,7 +1710,7 @@ export class GLTFToUSD {
 			const variant = new PrimSpec( name, 'over', '' );
 			set.set( name, variant );
 
-			for ( const [ key, prim ] of this.meshPrims ) {
+			for ( const [ key, prim ] of this.bindingPrims ) {
 
 				const [ nodeIndex, p ] = key.split( '/' ).map( Number );
 				const primitive = this.json.meshes[ this.json.nodes[ nodeIndex ].mesh ].primitives[ p ];
@@ -1768,6 +1830,64 @@ export function sampleTrack( track, time ) {
 	}
 
 	return a.map( ( v, i ) => v + ( b[ i ] - v ) * u );
+
+}
+
+// Triangle indices of a TRIANGLES, TRIANGLE_STRIP or TRIANGLE_FAN primitive.
+function triangleList( indices, mode ) {
+
+	let tris = indices;
+
+	if ( mode === MODES.TRIANGLE_STRIP ) {
+
+		const out = [];
+		for ( let i = 0; i + 2 < indices.length; i ++ ) {
+
+			if ( i % 2 === 0 ) out.push( indices[ i ], indices[ i + 1 ], indices[ i + 2 ] );
+			else out.push( indices[ i + 1 ], indices[ i ], indices[ i + 2 ] );
+
+		}
+
+		tris = Uint32Array.from( out );
+
+	} else if ( mode === MODES.TRIANGLE_FAN ) {
+
+		const out = [];
+		for ( let i = 1; i + 1 < indices.length; i ++ ) out.push( indices[ 0 ], indices[ i ], indices[ i + 1 ] );
+		tris = Uint32Array.from( out );
+
+	}
+
+	return tris.subarray( 0, tris.length - ( tris.length % 3 ) );
+
+}
+
+// The referenced vertices in ascending order, or null when every vertex is used.
+function vertexOrder( indices, count ) {
+
+	const used = new Uint8Array( count );
+	let n = 0;
+	for ( let i = 0; i < indices.length; i ++ ) if ( indices[ i ] < count && ! used[ indices[ i ] ] ) { used[ indices[ i ] ] = 1; n ++; }
+	if ( n === count ) return null;
+	const order = new Uint32Array( n );
+	for ( let v = 0, k = 0; v < count; v ++ ) if ( used[ v ] ) order[ k ++ ] = v;
+	return order;
+
+}
+
+function remapIndices( indices, order, count ) {
+
+	const map = new Uint32Array( count );
+	order.forEach( ( v, k ) => { map[ v ] = k; } );
+	return Uint32Array.from( indices, ( v ) => map[ v ] );
+
+}
+
+function gather( array, size, order ) {
+
+	const out = new array.constructor( order.length * size );
+	for ( let k = 0; k < order.length; k ++ ) for ( let c = 0; c < size; c ++ ) out[ k * size + c ] = array[ order[ k ] * size + c ];
+	return out;
 
 }
 

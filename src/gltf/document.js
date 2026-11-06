@@ -2,6 +2,7 @@
 
 import { readGLB, writeGLB } from './glb.js';
 import { decodeMeshoptView } from './meshopt.js';
+import { Budget, checkSize } from '../limits.js';
 
 const COMPONENT_ARRAYS = {
 	5120: Int8Array,
@@ -13,6 +14,43 @@ const COMPONENT_ARRAYS = {
 };
 
 export const TYPE_SIZES = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
+
+// Extensions an asset may require. Material extensions without a UsdPreviewSurface equivalent are
+// approximated and kept on the USD material for the way back, so every KHR_materials_* is accepted.
+const SUPPORTED_EXTENSIONS = new Set( [
+	'EXT_mesh_gpu_instancing', 'EXT_meshopt_compression', 'KHR_meshopt_compression', 'KHR_mesh_quantization',
+	'EXT_texture_webp', 'EXT_texture_avif', 'KHR_texture_transform', 'KHR_animation_pointer', 'KHR_lights_punctual',
+	'KHR_node_visibility', 'KHR_xmp_json_ld',
+] );
+
+/**
+ * The asset's required extensions that can't be converted (e.g. KHR_draco_mesh_compression, KHR_texture_basisu).
+ * @param {object} json
+ * @returns {string[]}
+ */
+export function unsupportedExtensions( json ) {
+
+	return ( json.extensionsRequired || [] ).filter( ( name ) => ! SUPPORTED_EXTENSIONS.has( name ) && ! name.startsWith( 'KHR_materials_' ) );
+
+}
+
+// Optional Draco needs uncompressed fallback data: without a bufferView or sparse values the
+// accessors would read as zeros.
+function checkDracoFallbacks( json ) {
+
+	( json.meshes || [] ).forEach( ( mesh, m ) => mesh.primitives.forEach( ( primitive, p ) => {
+
+		if ( ! primitive.extensions?.KHR_draco_mesh_compression ) return;
+		const used = [ ...Object.values( primitive.attributes ), primitive.indices ].filter( ( a ) => a !== undefined );
+		if ( used.some( ( a ) => json.accessors[ a ].bufferView === undefined && ! json.accessors[ a ].sparse ) ) {
+
+			throw new Error( `usd-gltf: mesh ${ m } primitive ${ p } is Draco compressed with no uncompressed fallback; KHR_draco_mesh_compression is not supported` );
+
+		}
+
+	} ) );
+
+}
 
 function decodeDataURI( uri ) {
 
@@ -38,11 +76,12 @@ function decodeDataURI( uri ) {
  */
 export class GLTFDocument {
 
-	constructor( json, buffers, images ) {
+	constructor( json, buffers, images, budget = new Budget() ) {
 
 		this.json = json;
 		this.buffers = buffers; // Uint8Array per json.buffers entry
 		this.images = images; // { bytes, mimeType, name } per json.images entry
+		this.budget = budget;
 		this.accessorCache = new Map();
 		this.decodedViews = new Map(); // bufferView index -> bytes, for compressed views
 
@@ -52,9 +91,11 @@ export class GLTFDocument {
 
 		const decoded = this.decodedViews.get( index );
 		if ( decoded ) return decoded;
-		const view = this.json.bufferViews[ index ];
-		const buffer = this.buffers[ view.buffer ];
-		return buffer.subarray( view.byteOffset || 0, ( view.byteOffset || 0 ) + view.byteLength );
+		const view = this.json.bufferViews?.[ index ];
+		const buffer = view && this.buffers[ view.buffer ];
+		const start = view?.byteOffset || 0;
+		if ( ! buffer || ! ( start + view.byteLength <= buffer.length ) ) throw new Error( `usd-gltf: bufferView ${ index } is outside its buffer` );
+		return buffer.subarray( start, start + view.byteLength );
 
 	}
 
@@ -68,11 +109,16 @@ export class GLTFDocument {
 		const key = index + ( normalize ? 'n' : '' );
 		if ( this.accessorCache.has( key ) ) return this.accessorCache.get( key );
 
-		const accessor = this.json.accessors[ index ];
-		const ArrayType = COMPONENT_ARRAYS[ accessor.componentType ];
-		const itemSize = TYPE_SIZES[ accessor.type ];
+		const accessor = this.json.accessors?.[ index ];
+		const ArrayType = COMPONENT_ARRAYS[ accessor?.componentType ];
+		const itemSize = TYPE_SIZES[ accessor?.type ];
+		if ( ! ArrayType || ! itemSize ) throw new Error( `usd-gltf: accessor ${ index } is missing or has an invalid type` );
 		const count = accessor.count;
-		let array = new ArrayType( count * itemSize );
+		const stage = `accessor ${ index }`;
+		const size = count * itemSize * ArrayType.BYTES_PER_ELEMENT;
+		checkSize( size, stage );
+
+		let read = null;
 
 		if ( accessor.bufferView !== undefined ) {
 
@@ -88,6 +134,17 @@ export class GLTFDocument {
 			const columnStride = Math.ceil( rows * elementBytes / 4 ) * 4;
 			const packed = columns === 1 ? itemSize * elementBytes : columnStride * columns;
 			const stride = view.byteStride || packed;
+			if ( count > 0 && ! ( offset + stride * ( count - 1 ) + packed <= bytes.length ) ) throw new Error( `usd-gltf: ${ stage } reads past the end of its bufferView` );
+			read = { view, bytes, elementBytes, offset, columns, rows, columnStride, stride };
+
+		}
+
+		this.budget.decode( size, stage );
+		let array = new ArrayType( count * itemSize );
+
+		if ( read ) {
+
+			const { bytes, elementBytes, offset, columns, rows, columnStride, stride } = read;
 
 			const dv = new DataView( bytes.buffer, bytes.byteOffset, bytes.byteLength );
 			const getters = { 5120: 'getInt8', 5121: 'getUint8', 5122: 'getInt16', 5123: 'getUint16', 5125: 'getUint32', 5126: 'getFloat32' };
@@ -120,9 +177,16 @@ export class GLTFDocument {
 			const IndexType = COMPONENT_ARRAYS[ indices.componentType ];
 			const ib = this.bufferViewBytes( indices.bufferView );
 			const vb = this.bufferViewBytes( values.bufferView );
+			if ( ! IndexType || ! Number.isSafeInteger( n ) || n < 0 || n > count ) throw new Error( `usd-gltf: ${ stage } has an invalid sparse count` );
+			if ( ! ( ( indices.byteOffset || 0 ) + n * IndexType.BYTES_PER_ELEMENT <= ib.length && ( values.byteOffset || 0 ) + n * itemSize * ArrayType.BYTES_PER_ELEMENT <= vb.length ) ) throw new Error( `usd-gltf: ${ stage } sparse data is outside its bufferViews` );
 			const idx = new IndexType( ib.slice( indices.byteOffset || 0, ( indices.byteOffset || 0 ) + n * IndexType.BYTES_PER_ELEMENT ).buffer );
 			const vals = new ArrayType( vb.slice( values.byteOffset || 0, ( values.byteOffset || 0 ) + n * itemSize * ArrayType.BYTES_PER_ELEMENT ).buffer );
-			for ( let i = 0; i < n; i ++ ) for ( let c = 0; c < itemSize; c ++ ) array[ idx[ i ] * itemSize + c ] = vals[ i * itemSize + c ];
+			for ( let i = 0; i < n; i ++ ) {
+
+				if ( idx[ i ] >= count ) throw new Error( `usd-gltf: ${ stage } sparse index is out of range` );
+				for ( let c = 0; c < itemSize; c ++ ) array[ idx[ i ] * itemSize + c ] = vals[ i * itemSize + c ];
+
+			}
 
 		}
 
@@ -130,6 +194,7 @@ export class GLTFDocument {
 
 		if ( normalize && normalized ) {
 
+			this.budget.decode( array.length * 4, stage );
 			const out = new Float32Array( array.length );
 			const ct = accessor.componentType;
 			for ( let i = 0; i < array.length; i ++ ) {
@@ -154,7 +219,9 @@ export class GLTFDocument {
 	getFloats( index ) {
 
 		const { array, itemSize, count } = this.getAccessor( index );
-		return { array: array instanceof Float32Array ? array : Float32Array.from( array ), itemSize, count };
+		if ( array instanceof Float32Array ) return { array, itemSize, count };
+		this.budget.decode( array.length * 4, `accessor ${ index }` );
+		return { array: Float32Array.from( array ), itemSize, count };
 
 	}
 
@@ -165,12 +232,17 @@ export class GLTFDocument {
  * @param {Uint8Array} bytes
  * @param {{ resolver?: ( uri: string ) => Promise<Uint8Array>|Uint8Array }} [options] loads external uris (already decoded from URI escaping)
  */
-export async function readGLTF( bytes, { resolver = null } = {} ) {
+export async function readGLTF( bytes, { resolver = null, budget = new Budget() } = {} ) {
 
 	let json, bin = null;
+	bytes = plainBytes( bytes );
 
 	if ( bytes[ 0 ] === 0x67 && bytes[ 1 ] === 0x6C && bytes[ 2 ] === 0x54 && bytes[ 3 ] === 0x46 ) ( { json, bin } = readGLB( bytes ) );
 	else json = JSON.parse( new TextDecoder().decode( bytes ).replace( /^﻿/, '' ) );
+
+	const unsupported = unsupportedExtensions( json );
+	if ( unsupported.length ) throw new Error( `usd-gltf: required extension${ unsupported.length > 1 ? 's' : '' } ${ unsupported.join( ', ' ) } not supported` );
+	checkDracoFallbacks( json );
 
 	async function load( uri ) {
 
@@ -179,7 +251,7 @@ export async function readGLTF( bytes, { resolver = null } = {} ) {
 		let path = uri;
 		try { path = decodeURIComponent( uri ); } catch { /* keep as is */ }
 		const data = await resolver( path );
-		return data instanceof Uint8Array ? data : new Uint8Array( data );
+		return plainBytes( data );
 
 	}
 
@@ -188,8 +260,9 @@ export async function readGLTF( bytes, { resolver = null } = {} ) {
 		if ( buffer.uri === undefined ) {
 
 			if ( i === 0 && bin ) return bin;
-			// e.g. EXT_meshopt_compression fallback buffers have no data
-			return new Uint8Array( buffer.byteLength );
+			// e.g. EXT_meshopt_compression fallback buffers: only read through decoded views, so they
+			// need no storage, and any other view into one fails its bounds check
+			return new Uint8Array( 0 );
 
 		}
 
@@ -197,12 +270,16 @@ export async function readGLTF( bytes, { resolver = null } = {} ) {
 
 	} ) );
 
-	const doc = new GLTFDocument( json, buffers, [] );
+	const doc = new GLTFDocument( json, buffers, [], budget );
 
 	( json.bufferViews || [] ).forEach( ( view, i ) => {
 
 		const ext = view.extensions?.KHR_meshopt_compression || view.extensions?.EXT_meshopt_compression;
-		if ( ext ) doc.decodedViews.set( i, decodeMeshoptView( ext, buffers ) );
+		if ( ! ext ) return;
+		const start = ext.byteOffset || 0;
+		if ( ! buffers[ ext.buffer ] || ! ( start + ext.byteLength <= buffers[ ext.buffer ].length ) ) throw new Error( `usd-gltf: bufferView ${ i } compressed data is outside its buffer` );
+		budget.decode( ext.count * ext.byteStride, `bufferView ${ i }` );
+		doc.decodedViews.set( i, decodeMeshoptView( ext, buffers ) );
 
 	} );
 
@@ -228,6 +305,14 @@ export async function readGLTF( bytes, { resolver = null } = {} ) {
 
 }
 
+// A plain Uint8Array view: a Node Buffer's slice() aliases its memory instead of copying, so data
+// read through .slice().buffer would be the wrong bytes.
+function plainBytes( data ) {
+
+	return ArrayBuffer.isView( data ) ? new Uint8Array( data.buffer, data.byteOffset, data.byteLength ) : new Uint8Array( data );
+
+}
+
 function guessMime( uri ) {
 
 	const ext = uri.split( '?' )[ 0 ].split( '.' ).pop().toLowerCase();
@@ -240,8 +325,9 @@ function guessMime( uri ) {
  */
 export class GLTFBuilder {
 
-	constructor( generator = 'usd-gltf' ) {
+	constructor( generator = 'usd-gltf', budget = new Budget() ) {
 
+		this.budget = budget;
 		this.json = { asset: { version: '2.0', generator }, scenes: [], nodes: [], meshes: [], materials: [], textures: [], images: [], samplers: [], accessors: [], bufferViews: [], buffers: [] };
 		this.chunks = [];
 		this.byteLength = 0;
@@ -262,6 +348,7 @@ export class GLTFBuilder {
 		const pad = ( 4 - ( this.byteLength % 4 ) ) % 4;
 		if ( pad ) { this.chunks.push( new Uint8Array( pad ) ); this.byteLength += pad; }
 
+		this.budget.output( this.byteLength + bytes.byteLength, 'glb buffer' );
 		const view = { buffer: 0, byteOffset: this.byteLength, byteLength: bytes.byteLength };
 		if ( target ) view.target = target;
 		this.chunks.push( bytes instanceof Uint8Array ? bytes : new Uint8Array( bytes.buffer, bytes.byteOffset, bytes.byteLength ) );
@@ -323,7 +410,9 @@ export class GLTFBuilder {
 
 	toGLB() {
 
-		const json = this.finalize();
+		const json = new TextEncoder().encode( JSON.stringify( this.finalize() ) );
+		const pad4 = ( n ) => Math.ceil( n / 4 ) * 4;
+		this.budget.output( 20 + pad4( json.byteLength ) + ( this.byteLength ? 8 + pad4( this.byteLength ) : 0 ), 'glb' );
 		const bin = new Uint8Array( this.byteLength );
 		let offset = 0;
 		for ( const chunk of this.chunks ) {

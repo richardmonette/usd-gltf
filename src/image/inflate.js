@@ -137,12 +137,12 @@ function corrupt( what ) {
 }
 
 // Inflates the raw DEFLATE stream starting at src[ pos ]. Returns the output and the byte offset just past the stream.
-function inflateStream( src, pos, sizeHint ) {
+function inflateStream( src, pos, sizeHint, maxSize ) {
 
 	const srcLen = src.length;
 	const overrun = srcLen + 8;
 
-	let out = new Uint8Array( sizeHint > 0 ? sizeHint : Math.max( 1 << 15, srcLen * 4 ) );
+	let out = new Uint8Array( Math.min( sizeHint > 0 ? sizeHint : Math.max( 1 << 15, srcLen * 4 ), maxSize ) );
 	let op = 0;
 
 	let bitBuf = 0;
@@ -154,7 +154,7 @@ function inflateStream( src, pos, sizeHint ) {
 	let clTable = null;
 
 	let final = 0;
-	const state = { src, overrun, pos, bitBuf, bitCnt, out, op };
+	const state = { src, overrun, pos, bitBuf, bitCnt, out, op, maxSize };
 
 	do {
 
@@ -188,7 +188,7 @@ function inflateStream( src, pos, sizeHint ) {
 			pos += 4;
 			if ( pos + len > srcLen ) throw corrupt( 'unexpected end' );
 
-			if ( op + len > out.length ) out = grow( out, op + len );
+			if ( op + len > out.length ) out = grow( out, op + len, maxSize );
 			out.set( src.subarray( pos, pos + len ), op );
 			op += len;
 			pos += len;
@@ -371,7 +371,7 @@ function decodeSymbols( state, litTable, litMask, distTable, distMask ) {
 
 			if ( op === outLen ) {
 
-				out = grow( out, op + 1 );
+				out = grow( out, op + 1, state.maxSize );
 				outLen = out.length;
 
 			}
@@ -435,7 +435,7 @@ function decodeSymbols( state, litTable, litMask, distTable, distMask ) {
 
 		if ( op + len > outLen ) {
 
-			out = grow( out, op + len );
+			out = grow( out, op + len, state.maxSize );
 			outLen = out.length;
 
 		}
@@ -464,9 +464,10 @@ function decodeSymbols( state, litTable, litMask, distTable, distMask ) {
 
 }
 
-function grow( out, need ) {
+function grow( out, need, maxSize ) {
 
-	const next = new Uint8Array( Math.max( need, out.length * 2 ) );
+	if ( need > maxSize ) throw corrupt( `more than the expected ${ maxSize } bytes` );
+	const next = new Uint8Array( Math.min( Math.max( need, out.length * 2 ), maxSize ) );
 	next.set( out );
 	return next;
 
@@ -482,11 +483,12 @@ function toBytes( data ) {
  * Decompresses raw DEFLATE data.
  * @param {Uint8Array} bytes
  * @param {number} [sizeHint] expected output size, avoids reallocation when known
+ * @param {number} [maxSize] fails rather than produce more than this
  * @returns {Uint8Array}
  */
-export function inflate( bytes, sizeHint = 0 ) {
+export function inflate( bytes, sizeHint = 0, maxSize = Infinity ) {
 
-	return inflateStream( toBytes( bytes ), 0, sizeHint ).data;
+	return inflateStream( toBytes( bytes ), 0, sizeHint, maxSize ).data;
 
 }
 
@@ -496,7 +498,7 @@ export function inflate( bytes, sizeHint = 0 ) {
  * @param {number} [sizeHint]
  * @returns {Uint8Array}
  */
-export function inflateZlib( bytes, sizeHint = 0 ) {
+export function inflateZlib( bytes, sizeHint = 0, maxSize = Infinity ) {
 
 	bytes = toBytes( bytes );
 	if ( bytes.length < 2 ) throw corrupt( 'missing zlib header' );
@@ -506,7 +508,7 @@ export function inflateZlib( bytes, sizeHint = 0 ) {
 	if ( ( cmf & 15 ) !== 8 || ( cmf >> 4 ) > 7 || ( ( cmf << 8 ) | flg ) % 31 !== 0 ) throw corrupt( 'bad zlib header' );
 	if ( flg & 32 ) throw corrupt( 'zlib preset dictionary not supported' );
 
-	const { data, end } = inflateStream( bytes, 2, sizeHint );
+	const { data, end } = inflateStream( bytes, 2, sizeHint, maxSize );
 
 	if ( end + 4 <= bytes.length ) {
 

@@ -276,13 +276,23 @@ async function khronos() {
 
 			if ( ! s.error ) problems.push( ...compareBounds( s, ( t ) => {
 
+				// primitives sharing vertex data share a USD Mesh, so their bounds are combined
 				const nodes = evaluateScene( c.doc, t / s.timeCodesPerSecond, 0 );
-				return Object.entries( c.mapping ).map( ( [ key, path ] ) => {
+				const byPath = new Map();
+
+				for ( const [ key, path ] of Object.entries( c.mapping ) ) {
 
 					const [ node, p ] = key.split( '/' ).map( Number );
-					return [ path, nodes.get( node )?.primitives[ p ] ];
+					const src = nodes.get( node )?.primitives[ p ];
+					if ( ! src ) continue;
+					const sum = byPath.get( path );
+					if ( ! sum ) { byPath.set( path, { ...src, min: [ ...src.min ], max: [ ...src.max ] } ); continue; }
+					sum.triangles += src.triangles;
+					for ( let k = 0; k < 3; k ++ ) { sum.min[ k ] = Math.min( sum.min[ k ], src.min[ k ] ); sum.max[ k ] = Math.max( sum.max[ k ], src.max[ k ] ); }
 
-				} ).filter( ( [ , src ] ) => src );
+				}
+
+				return [ ...byPath ];
 
 			} ) );
 
@@ -318,12 +328,17 @@ function roundTrip( doc, mapping, back ) {
 	const byPath = new Map();
 	back.json.nodes.forEach( ( n ) => { if ( n.extras?.usdPath && n.mesh !== undefined ) byPath.set( n.extras.usdPath, n ); } );
 
+	// the k-th primitive mapped to a USD Mesh is its k-th GeomSubset, so the k-th primitive back
+	const seen = new Map();
+
 	for ( const [ key, path ] of Object.entries( mapping ) ) {
 
 		const [ nodeIndex, p ] = key.split( '/' ).map( Number );
 		const primitive = doc.json.meshes[ doc.json.nodes[ nodeIndex ].mesh ].primitives[ p ];
 		const node = byPath.get( path );
-		const outPrimitive = node ? back.json.meshes[ node.mesh ].primitives[ 0 ] : null;
+		const k = seen.get( path ) || 0;
+		seen.set( path, k + 1 );
+		const outPrimitive = node ? back.json.meshes[ node.mesh ].primitives[ k ] : null;
 
 		if ( ! outPrimitive ) {
 

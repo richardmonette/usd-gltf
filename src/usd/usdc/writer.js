@@ -4,6 +4,7 @@
 import { AssetPath, DICT_TYPES, ListOp, Reference } from '../model.js';
 import { compressFast } from './lz4.js';
 import { compressInts32 } from './intcompression.js';
+import { Budget } from '../../limits.js';
 import { PERMISSIONS, POD, SPEC, SPECIFIERS, TYPE, crateTypeFor, floatToHalf, halfToFloat, isMatrixType, isVecType } from './types.js';
 
 const IS_ARRAY = 0x80000000;
@@ -148,8 +149,9 @@ function pathElements( path ) {
 
 class CrateWriter {
 
-	constructor() {
+	constructor( budget = new Budget() ) {
 
+		this.budget = budget;
 		this.buf = new Uint8Array( 1 << 16 );
 		this.view = new DataView( this.buf.buffer );
 		this.pos = 88; // bootstrap, written last
@@ -173,6 +175,7 @@ class CrateWriter {
 		this.fieldSetIndex = new Map();
 		this.specs = [];
 		this.timesCache = new Map();
+		this.arrayCache = new Map(); // hash -> [ { values, type, rep } ], so identical arrays are written once
 
 	}
 
@@ -181,8 +184,10 @@ class CrateWriter {
 	ensure( n ) {
 
 		if ( this.pos + n <= this.buf.length ) return;
+		this.budget.output( this.pos + n, 'usdc' );
 		let size = this.buf.length * 2;
 		while ( size < this.pos + n ) size *= 2;
+		size = Math.min( size, Math.max( this.pos + n, this.budget.maxOutputBytes ) );
 		const buf = new Uint8Array( size );
 		buf.set( this.buf );
 		this.buf = buf;
@@ -337,6 +342,7 @@ class CrateWriter {
 
 	addSpec( path, specType, fields ) {
 
+		this.budget.check();
 		const indexes = [];
 
 		for ( const [ name, [ lo, hi ] ] of fields ) {
@@ -690,7 +696,23 @@ class CrateWriter {
 
 	}
 
+	// Identical numeric arrays share one copy in the file, as OpenUSD's crate writer does.
 	packArray( values, type ) {
+
+		if ( ! POD[ type ] || values.length < MIN_COMPRESSED_ARRAY_SIZE ) return this.packArrayData( values, type );
+
+		const key = type + ':' + values.length + ':' + hashValues( values );
+		const entries = this.arrayCache.get( key ) || this.arrayCache.set( key, [] ).get( key );
+		const hit = entries.find( ( e ) => sameValues( e.values, values ) );
+		if ( hit ) return hit.rep;
+
+		const rep = this.packArrayData( values, type );
+		entries.push( { values, rep } );
+		return rep;
+
+	}
+
+	packArrayData( values, type ) {
 
 		const flags = ( IS_ARRAY | ( type << 16 ) ) >>> 0;
 		const pod = POD[ type ];
@@ -949,6 +971,33 @@ class CrateWriter {
 
 }
 
+const F64 = new Float64Array( 1 );
+const F64_WORDS = new Int32Array( F64.buffer );
+
+function hashValues( values ) {
+
+	let h = 0x811c9dc5;
+
+	for ( let i = 0; i < values.length; i ++ ) {
+
+		F64[ 0 ] = values[ i ];
+		h = Math.imul( h ^ F64_WORDS[ 0 ], 16777619 );
+		h = Math.imul( h ^ F64_WORDS[ 1 ], 16777619 );
+
+	}
+
+	return h >>> 0;
+
+}
+
+function sameValues( a, b ) {
+
+	if ( a.length !== b.length ) return false;
+	for ( let i = 0; i < a.length; i ++ ) if ( ! Object.is( a[ i ], b[ i ] ) ) return false;
+	return true;
+
+}
+
 function isInt8( v ) {
 
 	return Number.isInteger( v ) && v >= - 128 && v <= 127 && ! Object.is( v, - 0 );
@@ -1087,11 +1136,12 @@ function writeProperty( w, prop, path ) {
 /**
  * Writes a Layer as a binary USD crate file.
  * @param {import('../model.js').Layer} layer
+ * @param {{ budget?: import('../../limits.js').Budget }} [options]
  * @returns {Uint8Array}
  */
-export function writeUSDC( layer ) {
+export function writeUSDC( layer, { budget = new Budget() } = {} ) {
 
-	const w = new CrateWriter();
+	const w = new CrateWriter( budget );
 	const root = layer.root;
 
 	const fields = metadataFields( w, layer.metadata );

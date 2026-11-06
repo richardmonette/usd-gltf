@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- glTF assets that require an extension the converter can't honour, such as Draco (`KHR_draco_mesh_compression`) or KTX2 textures (`KHR_texture_basisu`), are rejected with an error naming it, instead of converting zero-filled geometry. Optional Draco and KTX2 use their uncompressed fallbacks. ([#3](https://github.com/richardmonette/usd-gltf/issues/3))
+- glTF primitives that share vertex data become one USD Mesh with a GeomSubset per primitive, and each USD Mesh keeps only the vertices it references, so vertex data is no longer written once per primitive. The usdc writer stores identical arrays once. ([#1](https://github.com/richardmonette/usd-gltf/issues/1))
+- Sparse accessors read the wrong bytes when a resolver returned a Node `Buffer` (its `slice()` shares memory). Found by the new bounds checks.
+- Opt-in `maxDecodedBytes`, `maxOutputBytes` and `signal` options on the conversion functions, with a `ConversionLimitError`. Accessors, bufferViews, sparse data, usdc counts, zip entries and inflate output are bounds checked before allocating, whatever the limits. ([#2](https://github.com/richardmonette/usd-gltf/issues/2))
 - Conformance checks every Khronos sample model as `.glb` and embedded `.gltf` too, not just `.gltf` (302 conversions).
 - GLB round trip tests in the regular test suite, using a generated model, so they run without the corpora.
 

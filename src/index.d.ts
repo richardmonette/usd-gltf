@@ -13,7 +13,28 @@ export interface DecodedImage {
 /** Replaces the built in image decoding (the platform decoder in browsers, JavaScript decoders in Node). */
 export type ImageDecoder = ( bytes: Uint8Array, mimeType?: string ) => DecodedImage | Promise<DecodedImage>;
 
-export interface USDToGLBOptions {
+/** Opt-in resource limits, for both directions. See README "Limits". */
+export interface ConversionLimits {
+	/** Decoded data held during the conversion: accessors, USD arrays, decompressed data, images, arrays written to the output layer. */
+	maxDecodedBytes?: number;
+	/** Largest output buffer: checked as writers grow and before the final usdz or glb is allocated. */
+	maxOutputBytes?: number;
+	/** Cancels the conversion, which then rejects with the signal's reason. */
+	signal?: AbortSignal;
+}
+
+/** Thrown when a conversion would go over one of its limits. Carries sizes only, never input data or file names. */
+export class ConversionLimitError extends Error {
+	name: 'ConversionLimitError';
+	code: 'USD_GLTF_LIMIT';
+	/** Where the limit was reached, e.g. 'accessor 3', 'usdc', 'image', 'glb'. */
+	stage: string;
+	resource: 'decoded' | 'output';
+	limit: number;
+	attempted: number;
+}
+
+export interface USDToGLBOptions extends ConversionLimits {
 	/** Name of the input file, used to resolve relative paths. */
 	identifier?: string;
 	/** Needed when the USD references files outside a usdz package. */
@@ -27,7 +48,7 @@ export interface USDToGLBOptions {
 	log?: ( message: string ) => void;
 }
 
-export interface GLBToUSDOptions {
+export interface GLBToUSDOptions extends ConversionLimits {
 	/** Output encoding: a usdz package (default), or a single usda / usdc layer without its textures. */
 	format?: 'usdz' | 'usda' | 'usdc';
 	/** Needed for .gltf files with external buffers or images. */
@@ -51,8 +72,8 @@ export function detectFormat( data: Uint8Array | ArrayBuffer ): 'glb' | 'gltf' |
 /** Splits a GLB into its JSON and binary chunk. */
 export function readGLB( data: Uint8Array | ArrayBuffer ): { json: any, bin: Uint8Array | null };
 
-/** Packs glTF JSON and a binary buffer into a GLB. */
-export function writeGLB( json: object, bin?: Uint8Array | null ): Uint8Array;
+/** Packs glTF JSON (an object, or already UTF-8 encoded) and a binary buffer into a GLB. */
+export function writeGLB( json: object | Uint8Array, bin?: Uint8Array | null ): Uint8Array;
 
 /** The uncomposed contents of one USD layer; see src/usd/model.js for the value representation. */
 export interface Layer {

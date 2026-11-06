@@ -5,6 +5,7 @@
 import { AssetPath, ListOp } from './model.js';
 import { readUSDA } from './usda/reader.js';
 import { readZip } from './usdz.js';
+import { Budget, rethrowFatal } from '../limits.js';
 
 const decoder = new TextDecoder();
 
@@ -80,9 +81,10 @@ export function resolveAssetPath( anchor, assetPath ) {
 // Reads bytes for identifiers, opening packages (including nested ones) through the user resolver.
 export class AssetReader {
 
-	constructor( resolver ) {
+	constructor( resolver, budget = new Budget() ) {
 
 		this.resolver = resolver;
+		this.budget = budget;
 		this.packages = new Map();
 		this.files = new Map();
 
@@ -123,7 +125,7 @@ export class AssetReader {
 
 	async openPackage( identifier ) {
 
-		if ( ! this.packages.has( identifier ) ) this.packages.set( identifier, readZip( await this.read( identifier ) ) );
+		if ( ! this.packages.has( identifier ) ) this.packages.set( identifier, readZip( await this.read( identifier ), { budget: this.budget } ) );
 		return this.packages.get( identifier );
 
 	}
@@ -140,7 +142,7 @@ export class AssetReader {
 
 }
 
-async function parseLayer( bytes, identifier ) {
+async function parseLayer( bytes, identifier, budget ) {
 
 	const format = detectLayerFormat( bytes );
 	if ( format === 'usda' ) return readUSDA( bytes, identifier );
@@ -148,7 +150,7 @@ async function parseLayer( bytes, identifier ) {
 	if ( format === 'usdc' ) {
 
 		const { readUSDC } = await import( './usdc/reader.js' );
-		return readUSDC( bytes, identifier );
+		return readUSDC( bytes, identifier, { budget } );
 
 	}
 
@@ -185,14 +187,15 @@ async function loadLayers( reader, rootIdentifier ) {
 
 		if ( detectLayerFormat( bytes ) === 'usdz' ) {
 
-			reader.addPackage( identifier, readZip( bytes ) );
+			reader.addPackage( identifier, readZip( bytes, { budget: reader.budget } ) );
 			const root = await load( await reader.packageRoot( identifier ) );
 			layers.set( identifier, root );
 			return root;
 
 		}
 
-		const layer = await parseLayer( bytes, identifier );
+		reader.budget.check();
+		const layer = await parseLayer( bytes, identifier, reader.budget );
 		layers.set( identifier, layer );
 
 		const pending = [];
@@ -216,6 +219,7 @@ async function loadLayers( reader, rootIdentifier ) {
 
 			} catch ( e ) {
 
+				rethrowFatal( e, reader.budget );
 				console.warn( `usd-gltf: ${ e.message }` );
 
 			}
@@ -862,16 +866,16 @@ export class Stage {
 /**
  * Opens and composes a stage.
  * @param {Uint8Array} bytes usda, usdc or usdz
- * @param {{ identifier?: string, resolver?: ( identifier: string ) => Promise<Uint8Array>|Uint8Array, variants?: object }} [options]
+ * @param {{ identifier?: string, resolver?: ( identifier: string ) => Promise<Uint8Array>|Uint8Array, variants?: object, budget?: import('../limits.js').Budget }} [options]
  * @returns {Promise<Stage>}
  */
-export async function openStage( bytes, { identifier, resolver = null, variants = {} } = {} ) {
+export async function openStage( bytes, { identifier, resolver = null, variants = {}, budget = new Budget() } = {} ) {
 
 	const format = detectLayerFormat( bytes );
 	if ( ! format ) throw new Error( 'usd-gltf: input is not usda, usdc or usdz' );
 
 	identifier ??= 'root.' + format;
-	const reader = new AssetReader( resolver );
+	const reader = new AssetReader( resolver, budget );
 	reader.files.set( identifier, bytes );
 
 	const { root, layers } = await loadLayers( reader, identifier );

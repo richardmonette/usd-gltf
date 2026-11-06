@@ -3,6 +3,7 @@
 
 import { crc32 } from '../util/crc32.js';
 import { inflate } from '../image/inflate.js';
+import { Budget } from '../limits.js';
 
 const LOCAL = 0x04034b50;
 const CENTRAL = 0x02014b50;
@@ -12,9 +13,10 @@ const ALIGN = 64;
 /**
  * Lists the files in a zip, in archive order.
  * @param {Uint8Array} bytes
+ * @param {{ budget?: import('../limits.js').Budget }} [options]
  * @returns {Map<string, Uint8Array>}
  */
-export function readZip( bytes ) {
+export function readZip( bytes, { budget = new Budget() } = {} ) {
 
 	const view = new DataView( bytes.buffer, bytes.byteOffset, bytes.byteLength );
 	const files = new Map();
@@ -33,6 +35,7 @@ export function readZip( bytes ) {
 
 		const method = view.getUint16( offset + 10, true );
 		const compressedSize = view.getUint32( offset + 20, true );
+		const size = view.getUint32( offset + 24, true );
 		const nameLength = view.getUint16( offset + 28, true );
 		const extraLength = view.getUint16( offset + 30, true );
 		const commentLength = view.getUint16( offset + 32, true );
@@ -40,12 +43,13 @@ export function readZip( bytes ) {
 		const name = decoder.decode( bytes.subarray( offset + 46, offset + 46 + nameLength ) );
 
 		const dataStart = localOffset + 30 + view.getUint16( localOffset + 26, true ) + view.getUint16( localOffset + 28, true );
+		if ( dataStart + compressedSize > bytes.length ) throw new Error( 'usd-gltf: truncated zip archive' );
 		const data = bytes.subarray( dataStart, dataStart + compressedSize );
 
 		if ( ! name.endsWith( '/' ) ) {
 
 			if ( method === 0 ) files.set( name, data );
-			else if ( method === 8 ) files.set( name, inflate( data ) );
+			else if ( method === 8 ) { budget.decode( size, 'zip' ); files.set( name, inflate( data, size, size ) ); }
 			else throw new Error( `usd-gltf: unsupported zip compression ${ method } for ${ name }` );
 
 		}
@@ -61,9 +65,10 @@ export function readZip( bytes ) {
 /**
  * Writes a USDZ package. The first entry must be the root layer.
  * @param {Array<{ name: string, data: Uint8Array }>} entries
+ * @param {{ budget?: import('../limits.js').Budget }} [options]
  * @returns {Uint8Array}
  */
-export function writeUSDZ( entries ) {
+export function writeUSDZ( entries, { budget = new Budget() } = {} ) {
 
 	const encoder = new TextEncoder();
 	const locals = [];
@@ -127,6 +132,7 @@ export function writeUSDZ( entries ) {
 	ev.setUint32( 12, centralSize, true );
 	ev.setUint32( 16, offset, true );
 
+	budget.output( offset + centralSize + 22, 'usdz' );
 	const out = new Uint8Array( offset + centralSize + 22 );
 	let p = 0;
 	for ( const part of [ ...locals, ...centrals, end ] ) {

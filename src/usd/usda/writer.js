@@ -357,11 +357,26 @@ function writePrim( out, spec, indent ) {
 
 /**
  * @param {import('../model.js').Layer} layer
+ * @param {{ budget?: import('../../limits.js').Budget }} [options] its output limit is checked as lines are written
  * @returns {string}
  */
-export function writeUSDA( layer ) {
+export function writeUSDA( layer, { budget = null } = {} ) {
 
 	const out = [ '#usda 1.0' ];
+
+	if ( budget ) {
+
+		let size = 0;
+		const push = out.push;
+		out.push = function ( ...lines ) {
+
+			for ( const line of lines ) size += line.length + 1;
+			budget.output( size, 'usda' );
+			return push.apply( this, lines );
+
+		};
+
+	}
 	const meta = formatMetadataEntries( layer.metadata, '    ', 'layer' );
 	if ( meta.length ) out.push( '(', ...meta, ')' );
 	out.push( '' );
