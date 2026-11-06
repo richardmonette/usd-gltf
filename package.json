@@ -1,6 +1,6 @@
 {
   "name": "usd-gltf",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Convert between USD (usda, usdc, usdz) and glTF / GLB, pure JavaScript with no dependencies",
   "type": "module",
   "main": "src/index.js",

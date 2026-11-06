@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1
 
 - Draco data that doesn't match its accessors rejects with a `DracoMismatchError`. Its `kind` says whether the vertex count, index count, component count, component type, attribute id or a shared accessor disagrees, and its fields give the mesh, primitive, semantic, accessor, and declared and decoded values. ([#4](https://github.com/richardmonette/usd-gltf/issues/4))
 - An opt-in `recoverDracoCounts` option converts files whose Draco counts disagree with their accessors. It uses the decoded counts and reports them through `log`, but only when nothing else depends on the declared counts and the decoded positions match the declared bounds. ([#4](https://github.com/richardmonette/usd-gltf/issues/4))
