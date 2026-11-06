@@ -34,6 +34,34 @@ export class ConversionLimitError extends Error {
 	attempted: number;
 }
 
+/**
+ * Thrown when decoded Draco data doesn't match the accessors describing it. With recoverDracoCounts,
+ * count mismatches that can't be checked still throw, with unrecoverable saying why.
+ */
+export class DracoMismatchError extends Error {
+	name: 'DracoMismatchError';
+	code: 'USD_GLTF_DRACO_MISMATCH';
+	/**
+	 * count / index-count: a different number of elements or indices than declared;
+	 * components: a different number of components than the accessor type has;
+	 * component-type: values the accessor's componentType can't hold;
+	 * attribute: no Draco attribute with the extension's id;
+	 * shared-accessor: one accessor decoded more than once to different data.
+	 */
+	kind: 'count' | 'index-count' | 'components' | 'component-type' | 'attribute' | 'shared-accessor';
+	mesh: number;
+	primitive: number;
+	/** The attribute semantic, e.g. 'POSITION', or 'indices'. */
+	semantic: string;
+	accessor: number;
+	/** What the accessor declares: its count, type, componentType, or the Draco attribute id. */
+	declared?: number | string;
+	/** What the Draco data has: a count of elements, indices or components. */
+	decoded?: number;
+	/** With recoverDracoCounts, why the decoded counts couldn't be used. */
+	unrecoverable: string | null;
+}
+
 export interface USDToGLBOptions extends ConversionLimits {
 	/** Name of the input file, used to resolve relative paths. */
 	identifier?: string;
@@ -58,7 +86,14 @@ export interface GLBToUSDOptions extends ConversionLimits {
 	 * promise of one. Without it, Draco files load draco3d in Node and Google's CDN build in browsers.
 	 */
 	dracoDecoder?: object | Promise<object>;
+	/**
+	 * Use decoded Draco counts that disagree with their accessors' counts, which the extension
+	 * doesn't allow, when everything else depending on them can be checked against the decoded data.
+	 * Each recovery is reported through log. Default false: such files throw a DracoMismatchError.
+	 */
+	recoverDracoCounts?: boolean;
 	imageDecoder?: ImageDecoder;
+	/** Receives non fatal problems, such as textures that could not be read or recovered Draco counts. */
 	log?: ( message: string ) => void;
 }
 

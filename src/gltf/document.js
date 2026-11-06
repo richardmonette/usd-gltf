@@ -2,7 +2,7 @@
 
 import { readGLB, writeGLB } from './glb.js';
 import { decodeMeshoptView } from './meshopt.js';
-import { decodeDracoPrimitive, loadDracoDecoder, needsDraco } from './draco.js';
+import { decodeDracoPrimitive, loadDracoDecoder, needsDraco, resolveDracoAccessors } from './draco.js';
 import { Budget, checkSize } from '../limits.js';
 
 const COMPONENT_ARRAYS = {
@@ -215,9 +215,11 @@ export class GLTFDocument {
 /**
  * Loads a glTF or GLB.
  * @param {Uint8Array} bytes
- * @param {{ resolver?: ( uri: string ) => Promise<Uint8Array>|Uint8Array, dracoDecoder?: object|Promise<object> }} [options] resolver loads external uris (already decoded from URI escaping); dracoDecoder is a Draco decoder module, loaded when needed if not given
+ * @param {{ resolver?: ( uri: string ) => Promise<Uint8Array>|Uint8Array, dracoDecoder?: object|Promise<object>, recoverDracoCounts?: boolean, log?: ( message: string ) => void }} [options]
+ *   resolver loads external uris (already decoded from URI escaping); dracoDecoder is a Draco decoder module, loaded when needed if not given;
+ *   recoverDracoCounts uses decoded Draco counts that disagree with their accessors when that can be checked, and logs it
  */
-export async function readGLTF( bytes, { resolver = null, budget = new Budget(), dracoDecoder = null } = {} ) {
+export async function readGLTF( bytes, { resolver = null, budget = new Budget(), dracoDecoder = null, recoverDracoCounts = false, log = () => {} } = {} ) {
 
 	let json, bin = null;
 	bytes = plainBytes( bytes );
@@ -268,19 +270,19 @@ export async function readGLTF( bytes, { resolver = null, budget = new Budget(),
 	} );
 
 	// Draco primitives without uncompressed fallback data
-	const draco = ( json.meshes || [] ).flatMap( ( mesh ) => mesh.primitives ).filter( ( p ) => needsDraco( json, p ) );
+	const draco = ( json.meshes || [] ).flatMap( ( mesh, m ) => ( mesh.primitives || [] ).map( ( primitive, index ) => ( { mesh: m, index, primitive } ) ) ).filter( ( p ) => needsDraco( json, p.primitive ) );
 
 	if ( draco.length ) {
 
 		const decoder = await ( dracoDecoder || loadDracoDecoder() );
-
-		for ( const primitive of draco ) {
+		const decoded = draco.map( ( where ) => {
 
 			budget.check();
-			const bytes = doc.bufferViewBytes( primitive.extensions.KHR_draco_mesh_compression.bufferView );
-			for ( const [ index, data ] of decodeDracoPrimitive( decoder, bytes, json, primitive, budget ) ) doc.decodedAccessors.set( index, data );
+			const bytes = doc.bufferViewBytes( where.primitive.extensions.KHR_draco_mesh_compression.bufferView );
+			return { ...where, ...decodeDracoPrimitive( decoder, bytes, json, where, budget ) };
 
-		}
+		} );
+		doc.decodedAccessors = resolveDracoAccessors( json, decoded, { recoverCounts: recoverDracoCounts, log } );
 
 	}
 

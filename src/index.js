@@ -15,6 +15,7 @@ export { writeUSDA } from './usd/usda/writer.js';
 export { readUSDC } from './usd/usdc/reader.js';
 export { writeUSDC } from './usd/usdc/writer.js';
 export { ConversionLimitError } from './limits.js';
+export { DracoMismatchError } from './gltf/draco.js';
 
 function toBytes( data ) {
 
@@ -50,13 +51,13 @@ export async function usdToGLB( data, options = {} ) {
 /**
  * Converts GLB (or glTF JSON with embedded or resolvable buffers) to USD.
  * @param {ArrayBuffer|Uint8Array} data
- * @param {{ format?: 'usda'|'usdc'|'usdz', resolver?: ( uri: string ) => Promise<Uint8Array>, dracoDecoder?: object, maxDecodedBytes?: number, maxOutputBytes?: number, signal?: AbortSignal }} [options]
+ * @param {{ format?: 'usda'|'usdc'|'usdz', resolver?: ( uri: string ) => Promise<Uint8Array>, dracoDecoder?: object, recoverDracoCounts?: boolean, log?: ( message: string ) => void, maxDecodedBytes?: number, maxOutputBytes?: number, signal?: AbortSignal }} [options]
  * @returns {Promise<Uint8Array>}
  */
-export async function glbToUSD( data, { format = 'usdz', resolver = null, log, imageDecoder, dracoDecoder, ...limits } = {} ) {
+export async function glbToUSD( data, { format = 'usdz', resolver = null, log, imageDecoder, dracoDecoder, recoverDracoCounts, ...limits } = {} ) {
 
 	const budget = budgetFor( limits );
-	const doc = await readGLTF( toBytes( data ), { resolver, budget, dracoDecoder } );
+	const doc = await readGLTF( toBytes( data ), { resolver, budget, dracoDecoder, recoverDracoCounts, log } );
 	const { layer, files } = await new GLTFToUSD( doc, { log, imageDecoder } ).convert();
 	let out;
 
@@ -73,10 +74,10 @@ export async function glbToUSD( data, { format = 'usdz', resolver = null, log, i
  * For usda / usdc output the textures are separate files; this returns them alongside the layer.
  * @returns {Promise<{ layer: Uint8Array, files: Array<{ name: string, data: Uint8Array }> }>}
  */
-export async function glbToUSDFiles( data, { format = 'usda', resolver = null, log, imageDecoder, dracoDecoder, ...limits } = {} ) {
+export async function glbToUSDFiles( data, { format = 'usda', resolver = null, log, imageDecoder, dracoDecoder, recoverDracoCounts, ...limits } = {} ) {
 
 	const budget = budgetFor( limits );
-	const doc = await readGLTF( toBytes( data ), { resolver, budget, dracoDecoder } );
+	const doc = await readGLTF( toBytes( data ), { resolver, budget, dracoDecoder, recoverDracoCounts, log } );
 	const { layer, files } = await new GLTFToUSD( doc, { log, imageDecoder } ).convert();
 	const bytes = format === 'usdc' ? writeUSDC( layer, { budget } ) : new TextEncoder().encode( writeUSDA( layer, { budget } ) );
 	budget.output( files.reduce( ( n, f ) => n + f.data.byteLength, bytes.byteLength ), 'usd files' );

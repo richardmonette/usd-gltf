@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Draco data that doesn't match its accessors rejects with a `DracoMismatchError`. Its `kind` says whether the vertex count, index count, component count, component type, attribute id or a shared accessor disagrees, and its fields give the mesh, primitive, semantic, accessor, and declared and decoded values. ([#4](https://github.com/richardmonette/usd-gltf/issues/4))
+- An opt-in `recoverDracoCounts` option converts files whose Draco counts disagree with their accessors. It uses the decoded counts and reports them through `log`, but only when nothing else depends on the declared counts and the decoded positions match the declared bounds. ([#4](https://github.com/richardmonette/usd-gltf/issues/4))
+- Draco indices too large for the accessor's component type are an error; they used to wrap around silently. So are Draco indices past the decoded vertex count.
+- Two Draco primitives decoding one accessor to different data is an error. Previously the last one decoded won.
+
 ## 0.3.0
 
 - Draco compressed glTF (`KHR_draco_mesh_compression`) converts. The decoder is loaded only when a file needs it: the `draco3d` package in Node, an optional peer dependency, or Google's CDN build in browsers, pinned to version 1.5.7 and checked against its SHA-256 before it runs. A `dracoDecoder` option takes your own.

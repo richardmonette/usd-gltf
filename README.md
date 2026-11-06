@@ -52,6 +52,21 @@ import draco3d from 'draco3d';
 const usdz = await glbToUSD( glb, { dracoDecoder: await draco3d.createDecoderModule() } );
 ```
 
+The extension requires accessors to describe the decoded data exactly. When they don't, conversion rejects with a `DracoMismatchError`. Its `kind` says what disagrees: `'count'`, `'index-count'`, `'components'`, `'component-type'`, `'attribute'` or `'shared-accessor'`. Its `mesh`, `primitive`, `semantic`, `accessor`, `declared` and `decoded` fields say where and by how much.
+
+Some files declare stale counts, for example from metadata written before compression changed the vertex layout. `recoverDracoCounts: true` converts those using the decoded counts and reports each one through `log`. It only does so when everything else that depends on those counts can be checked against the decoded data:
+
+- the accessors are used only by Draco primitives decoding the same data;
+- the primitive's uncompressed attributes and morph targets have the decoded vertex count;
+- the accessors aren't sparse;
+- the decoded positions match `POSITION`'s `min` and `max`.
+
+Otherwise it still rejects, with `unrecoverable` saying why. Other mismatches, such as a different number of components, are never recovered. The decoder's output is sized by the decoded data, never by the declared counts, and counts against the limits below either way.
+
+```js
+const usdz = await glbToUSD( glb, { recoverDracoCounts: true, log: console.warn } );
+```
+
 ## Limits
 
 Input size alone doesn't bound how much memory a conversion needs: an accessor can declare millions of vertices with no data behind them, and compressed geometry and images expand when decoded. Both directions take opt-in limits:
