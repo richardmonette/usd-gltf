@@ -2,6 +2,7 @@
 
 import { readGLB, writeGLB } from './glb.js';
 import { decodeMeshoptView } from './meshopt.js';
+import { decodeDracoPrimitive, loadDracoDecoder, needsDraco } from './draco.js';
 import { Budget, checkSize } from '../limits.js';
 
 const COMPONENT_ARRAYS = {
@@ -18,37 +19,19 @@ export const TYPE_SIZES = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3:
 // Extensions an asset may require. Material extensions without a UsdPreviewSurface equivalent are
 // approximated and kept on the USD material for the way back, so every KHR_materials_* is accepted.
 const SUPPORTED_EXTENSIONS = new Set( [
-	'EXT_mesh_gpu_instancing', 'EXT_meshopt_compression', 'KHR_meshopt_compression', 'KHR_mesh_quantization',
+	'EXT_mesh_gpu_instancing', 'EXT_meshopt_compression', 'KHR_meshopt_compression', 'KHR_mesh_quantization', 'KHR_draco_mesh_compression',
 	'EXT_texture_webp', 'EXT_texture_avif', 'KHR_texture_transform', 'KHR_animation_pointer', 'KHR_lights_punctual',
 	'KHR_node_visibility', 'KHR_xmp_json_ld',
 ] );
 
 /**
- * The asset's required extensions that can't be converted (e.g. KHR_draco_mesh_compression, KHR_texture_basisu).
+ * The asset's required extensions that can't be converted (e.g. KHR_texture_basisu).
  * @param {object} json
  * @returns {string[]}
  */
 export function unsupportedExtensions( json ) {
 
 	return ( json.extensionsRequired || [] ).filter( ( name ) => ! SUPPORTED_EXTENSIONS.has( name ) && ! name.startsWith( 'KHR_materials_' ) );
-
-}
-
-// Optional Draco needs uncompressed fallback data: without a bufferView or sparse values the
-// accessors would read as zeros.
-function checkDracoFallbacks( json ) {
-
-	( json.meshes || [] ).forEach( ( mesh, m ) => mesh.primitives.forEach( ( primitive, p ) => {
-
-		if ( ! primitive.extensions?.KHR_draco_mesh_compression ) return;
-		const used = [ ...Object.values( primitive.attributes ), primitive.indices ].filter( ( a ) => a !== undefined );
-		if ( used.some( ( a ) => json.accessors[ a ].bufferView === undefined && ! json.accessors[ a ].sparse ) ) {
-
-			throw new Error( `usd-gltf: mesh ${ m } primitive ${ p } is Draco compressed with no uncompressed fallback; KHR_draco_mesh_compression is not supported` );
-
-		}
-
-	} ) );
 
 }
 
@@ -84,6 +67,7 @@ export class GLTFDocument {
 		this.budget = budget;
 		this.accessorCache = new Map();
 		this.decodedViews = new Map(); // bufferView index -> bytes, for compressed views
+		this.decodedAccessors = new Map(); // accessor index -> data, for Draco compressed primitives
 
 	}
 
@@ -139,8 +123,9 @@ export class GLTFDocument {
 
 		}
 
-		this.budget.decode( size, stage );
-		let array = new ArrayType( count * itemSize );
+		const decoded = accessor.bufferView === undefined ? this.decodedAccessors.get( index ) : undefined; // charged when decoded
+		if ( ! decoded ) this.budget.decode( size, stage );
+		let array = decoded || new ArrayType( count * itemSize );
 
 		if ( read ) {
 
@@ -230,9 +215,9 @@ export class GLTFDocument {
 /**
  * Loads a glTF or GLB.
  * @param {Uint8Array} bytes
- * @param {{ resolver?: ( uri: string ) => Promise<Uint8Array>|Uint8Array }} [options] loads external uris (already decoded from URI escaping)
+ * @param {{ resolver?: ( uri: string ) => Promise<Uint8Array>|Uint8Array, dracoDecoder?: object|Promise<object> }} [options] resolver loads external uris (already decoded from URI escaping); dracoDecoder is a Draco decoder module, loaded when needed if not given
  */
-export async function readGLTF( bytes, { resolver = null, budget = new Budget() } = {} ) {
+export async function readGLTF( bytes, { resolver = null, budget = new Budget(), dracoDecoder = null } = {} ) {
 
 	let json, bin = null;
 	bytes = plainBytes( bytes );
@@ -242,7 +227,6 @@ export async function readGLTF( bytes, { resolver = null, budget = new Budget() 
 
 	const unsupported = unsupportedExtensions( json );
 	if ( unsupported.length ) throw new Error( `usd-gltf: required extension${ unsupported.length > 1 ? 's' : '' } ${ unsupported.join( ', ' ) } not supported` );
-	checkDracoFallbacks( json );
 
 	async function load( uri ) {
 
@@ -282,6 +266,23 @@ export async function readGLTF( bytes, { resolver = null, budget = new Budget() 
 		doc.decodedViews.set( i, decodeMeshoptView( ext, buffers ) );
 
 	} );
+
+	// Draco primitives without uncompressed fallback data
+	const draco = ( json.meshes || [] ).flatMap( ( mesh ) => mesh.primitives ).filter( ( p ) => needsDraco( json, p ) );
+
+	if ( draco.length ) {
+
+		const decoder = await ( dracoDecoder || loadDracoDecoder() );
+
+		for ( const primitive of draco ) {
+
+			budget.check();
+			const bytes = doc.bufferViewBytes( primitive.extensions.KHR_draco_mesh_compression.bufferView );
+			for ( const [ index, data ] of decodeDracoPrimitive( decoder, bytes, json, primitive, budget ) ) doc.decodedAccessors.set( index, data );
+
+		}
+
+	}
 
 	doc.images = await Promise.all( ( json.images || [] ).map( async ( image ) => {
 

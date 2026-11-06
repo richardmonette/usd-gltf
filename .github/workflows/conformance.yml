@@ -28,7 +28,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: corpus
-          key: corpus-v2
+          key: corpus-v3
       - run: npm run fetch-corpus
       - run: npm run conformance
       - uses: actions/upload-artifact@v4

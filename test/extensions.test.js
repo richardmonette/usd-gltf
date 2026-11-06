@@ -18,39 +18,32 @@ function triangle() {
 
 }
 
-// A Draco primitive whose accessors only describe the decoded data, as Draco encoders write them.
-function dracoOnly( required ) {
+// A Draco primitive whose compressed data is garbage: it must fail, not convert zeros.
+function corruptDraco() {
 
 	const { json, bin } = triangle();
 	json.bufferViews.push( { buffer: 0, byteOffset: 0, byteLength: 4 } );
-	const draco = { bufferView: json.bufferViews.length - 1, attributes: { POSITION: 0 } };
 	const primitive = json.meshes[ 0 ].primitives[ 0 ];
-	primitive.extensions = { KHR_draco_mesh_compression: draco };
+	primitive.extensions = { KHR_draco_mesh_compression: { bufferView: json.bufferViews.length - 1, attributes: { POSITION: 0 } } };
 	for ( const a of [ primitive.attributes.POSITION, primitive.indices ] ) delete json.accessors[ a ].bufferView;
-	json.extensionsUsed = [ 'KHR_draco_mesh_compression' ];
-	if ( required ) json.extensionsRequired = [ 'KHR_draco_mesh_compression' ];
+	json.extensionsUsed = json.extensionsRequired = [ 'KHR_draco_mesh_compression' ];
 	return writeGLB( json, bin );
 
 }
 
-test( 'required Draco is rejected instead of converting zeros', async () => {
+test( 'Draco data that fails to decode is an error, not zero-filled geometry', async () => {
 
-	await assert.rejects( glbToUSD( dracoOnly( true ) ), /required extension KHR_draco_mesh_compression not supported/ );
-
-} );
-
-test( 'optional Draco without uncompressed fallback data is rejected', async () => {
-
-	await assert.rejects( glbToUSD( dracoOnly( false ) ), /no uncompressed fallback/ );
+	await assert.rejects( glbToUSD( corruptDraco() ), /Draco/ );
 
 } );
 
-test( 'optional Draco with an uncompressed fallback converts from the fallback', async () => {
+test( 'optional Draco with an uncompressed fallback converts from the fallback without a decoder', async () => {
 
 	const { json, bin } = triangle();
 	json.meshes[ 0 ].primitives[ 0 ].extensions = { KHR_draco_mesh_compression: { bufferView: 0, attributes: { POSITION: 0 } } };
 	json.extensionsUsed = [ 'KHR_draco_mesh_compression' ];
-	const doc = await readGLTF( await usdToGLB( await glbToUSD( writeGLB( json, bin ) ) ) );
+	const unused = new Proxy( {}, { get: () => { throw new Error( 'decoder used' ); } } );
+	const doc = await readGLTF( await usdToGLB( await glbToUSD( writeGLB( json, bin ), { dracoDecoder: unused } ) ) );
 	const position = doc.json.accessors[ doc.json.meshes[ 0 ].primitives[ 0 ].attributes.POSITION ];
 	assert.deepEqual( [ position.min, position.max ], [ [ 0, 0, 0 ], [ 1, 1, 0 ] ] );
 

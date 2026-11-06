@@ -53,6 +53,11 @@ export interface GLBToUSDOptions extends ConversionLimits {
 	format?: 'usdz' | 'usda' | 'usdc';
 	/** Needed for .gltf files with external buffers or images. */
 	resolver?: Resolver;
+	/**
+	 * A Draco decoder module (from draco3d's createDecoderModule, or Google's decoder build), or a
+	 * promise of one. Without it, Draco files load draco3d in Node and Google's CDN build in browsers.
+	 */
+	dracoDecoder?: object | Promise<object>;
 	imageDecoder?: ImageDecoder;
 	log?: ( message: string ) => void;
 }

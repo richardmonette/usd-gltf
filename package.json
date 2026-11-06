@@ -35,7 +35,8 @@
     "gltf",
     "glb",
     "converter",
-    "3d"
+    "3d",
+    "draco"
   ],
   "author": "Richard Monette",
   "license": "MIT",
@@ -47,7 +48,16 @@
     "url": "https://github.com/richardmonette/usd-gltf/issues"
   },
   "homepage": "https://github.com/richardmonette/usd-gltf#readme",
+  "peerDependencies": {
+    "draco3d": "^1.5.7"
+  },
+  "peerDependenciesMeta": {
+    "draco3d": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "draco3d": "^1.5.7",
     "gltf-validator": "^2.0.0-dev.3.10",
     "meshoptimizer": "^1.3.0"
   },

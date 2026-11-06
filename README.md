@@ -37,7 +37,20 @@ USD to glTF composes the stage first (sublayers, references, payloads, inherits,
 
 glTF to USD writes `UsdPreviewSurface` materials, UsdSkel skins and blend shapes, time sampled animation, variant sets for material variants and multiple animations, cameras and lights. glTF features that `UsdPreviewSurface` can't express (transmission, sheen, iridescence, ...) are kept in the material's `customData`, so converting back to glTF is lossless. Primitives of a mesh that share their vertex data become one USD Mesh with a GeomSubset per primitive, and each Mesh keeps only the vertices it uses, so vertex data is never repeated per primitive.
 
-glTF compression: meshopt (`EXT_meshopt_compression`, `KHR_meshopt_compression`) and `KHR_mesh_quantization` are decoded. Draco (`KHR_draco_mesh_compression`) and KTX2 textures (`KHR_texture_basisu`) are not: when an asset lists them in `extensionsRequired` the conversion fails with an error naming them, and when they are optional the uncompressed fallback data is used.
+glTF compression: meshopt (`EXT_meshopt_compression`, `KHR_meshopt_compression`), `KHR_mesh_quantization` and Draco (`KHR_draco_mesh_compression`, see below) are decoded. KTX2 textures (`KHR_texture_basisu`) are not: an asset that requires them fails with an error naming the extension, and when they are optional the PNG or JPEG fallback is used.
+
+### Draco
+
+usd-gltf doesn't bundle a Draco decoder; it loads Google's only when a file is Draco compressed, and uses the uncompressed fallback without loading anything when a file has one.
+
+- **Node:** install [`draco3d`](https://www.npmjs.com/package/draco3d) alongside, an optional peer dependency, and Draco files just work: `npm install draco3d`.
+- **Browsers:** the decoder (about 250 KB) is fetched from Google's CDN, `www.gstatic.com/draco/versioned/decoders/1.5.7/`, pinned to that version and checked against its SHA-256 before it runs. This needs a secure context, and a Content Security Policy that allows the fetch, `unsafe-eval` and WebAssembly.
+- **Your own:** pass a decoder module as `dracoDecoder` to use a self hosted copy, or where the CDN isn't allowed:
+
+```js
+import draco3d from 'draco3d';
+const usdz = await glbToUSD( glb, { dracoDecoder: await draco3d.createDecoderModule() } );
+```
 
 ## Limits
 
@@ -62,7 +75,7 @@ Going over a limit rejects with a `ConversionLimitError` whose `stage`, `resourc
 Current status:
 
 - All 18 USD files in Apple's AR Quick Look gallery convert to GLB. Per mesh triangle counts and world space bounds at the start, middle and end of each animation match OpenUSD with skinning baked, and the Khronos glTF Validator reports no errors. (The gallery's three `.reality` files are RealityKit's format, not USD.)
-- All 150 Khronos glTF sample models convert to USDZ that OpenUSD's validators accept with no errors or warnings, with geometry matching the source at several animation times, and convert back to glTF with identical materials, material variants and animations. Each model is checked as `.gltf`, and also as `.glb` (120 models) and embedded `.gltf` (32 models) where the sample set has those versions: 302 conversions in all.
+- All 150 Khronos glTF sample models convert to USDZ that OpenUSD's validators accept with no errors or warnings, with geometry matching the source at several animation times, and convert back to glTF with identical materials, material variants and animations. Each model is checked as `.gltf`, and also as `.glb` (120 models), embedded `.gltf` (32 models) and Draco compressed (16 models) where the sample set has those versions: 318 conversions in all.
 
 The acceptance corpora are every model in [Apple's AR Quick Look gallery](https://developer.apple.com/augmented-reality/quick-look/) and every model in the [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets). Conversions are checked against Pixar's OpenUSD (`usd-core`) and the Khronos glTF Validator: per mesh triangle counts and world space bounds at several animation times, with skinning baked by OpenUSD, must match.
 

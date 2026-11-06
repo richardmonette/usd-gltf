@@ -220,12 +220,12 @@ async function khronos() {
 	mkdirSync( usdzDir, { recursive: true } );
 	const converted = new Map();
 
-	// every model as .gltf, and as .glb and embedded .gltf where it has those variants
+	// every model as .gltf, and as .glb, embedded .gltf and Draco compressed where it has those variants
 	const cases = [];
 
 	for ( const model of index ) {
 
-		for ( const [ variant, label ] of [ [ 'glTF', '' ], [ 'glTF-Binary', ' (glb)' ], [ 'glTF-Embedded', ' (embedded)' ] ] ) {
+		for ( const [ variant, label ] of [ [ 'glTF', '' ], [ 'glTF-Binary', ' (glb)' ], [ 'glTF-Embedded', ' (embedded)' ], [ 'glTF-Draco', ' (draco)' ] ] ) {
 
 			const file = model.variants[ variant ] && join( corpus, 'khronos', 'Models', model.name, variant, model.variants[ variant ] );
 			if ( file && existsSync( file ) ) cases.push( { name: model.name + label, file } );
