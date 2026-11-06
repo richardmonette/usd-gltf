@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 - glTF assets that require an extension the converter can't honour, such as Draco (`KHR_draco_mesh_compression`) or KTX2 textures (`KHR_texture_basisu`), are rejected with an error naming it, instead of converting zero-filled geometry. Optional Draco and KTX2 use their uncompressed fallbacks. ([#3](https://github.com/richardmonette/usd-gltf/issues/3))
 - glTF primitives that share vertex data become one USD Mesh with a GeomSubset per primitive, and each USD Mesh keeps only the vertices it references, so vertex data is no longer written once per primitive. The usdc writer stores identical arrays once. ([#1](https://github.com/richardmonette/usd-gltf/issues/1))
