@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 - Draco compressed glTF (`KHR_draco_mesh_compression`) converts. The decoder is loaded only when a file needs it: the `draco3d` package in Node, an optional peer dependency, or Google's CDN build in browsers, pinned to version 1.5.7 and checked against its SHA-256 before it runs. A `dracoDecoder` option takes your own.
 - Conformance includes the 16 Draco compressed Khronos sample models (318 conversions).
