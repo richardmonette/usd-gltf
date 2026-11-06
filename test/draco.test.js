@@ -93,7 +93,7 @@ test( 'a given dracoDecoder is used, and decoded data counts against the limits'
 
 } );
 
-test( 'the CDN decoder is only run when it matches its pinned hash', async ( t ) => {
+test( 'the CDN decoder is only run when it matches its pinned hash', { skip: ! globalThis.crypto?.subtle && 'no Web Crypto global (Node 18)' }, async ( t ) => {
 
 	t.mock.method( globalThis, 'fetch', async () => new Response( new TextEncoder().encode( 'globalThis.pwned = true' ) ) );
 	await assert.rejects( loadDracoFromCDN(), /doesn't match its expected hash/ );
