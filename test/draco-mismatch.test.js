@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import draco3d from 'draco3d';
 import validator from 'gltf-validator';
 import { glbToUSD, usdToGLB, writeGLB, DracoMismatchError, ConversionLimitError } from '../src/index.js';
@@ -12,7 +13,7 @@ import { readGLTF } from '../src/gltf/document.js';
 const encoder = await draco3d.createEncoderModule();
 const dracoDecoder = await draco3d.createDecoderModule();
 
-const root = path.resolve( import.meta.dirname, '..' );
+const root = path.join( path.dirname( fileURLToPath( import.meta.url ) ), '..' );
 const python = [ '.venv/Scripts/python.exe', '.venv/bin/python' ].map( ( p ) => path.join( root, p ) ).find( ( p ) => fs.existsSync( p ) );
 
 // Draco data for a mesh of positions and triangle indices.
