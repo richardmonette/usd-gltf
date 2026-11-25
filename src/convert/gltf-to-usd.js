@@ -23,6 +23,34 @@ const TIME_CODES_PER_SECOND = 60;
 // Extensions whose data is fully expressed in USD; anything else on a material is stashed.
 const MAPPED_MATERIAL_EXTENSIONS = new Set( [ 'KHR_materials_emissive_strength', 'KHR_materials_ior', 'KHR_materials_clearcoat' ] );
 
+// The fraction of each channel of the light behind that transmissive glass lets through: the base
+// color times the volume's attenuation over its thickness. The thickness texture isn't sampled, and
+// the attenuation is capped at the attenuation color, so thick glass keeps its color instead of
+// turning black.
+function glassTransmittance( baseFactor, volume ) {
+
+	const thickness = volume?.thicknessFactor ?? 0;
+	const distance = volume?.attenuationDistance;
+	const depth = thickness > 0 && distance > 0 && Number.isFinite( distance ) ? Math.min( thickness / distance, 1 ) : 0;
+	const attenuation = volume?.attenuationColor ?? [ 1, 1, 1 ];
+	return [ 0, 1, 2 ].map( ( c ) => Math.min( Math.max( ( baseFactor[ c ] ?? 1 ) * Math.max( attenuation[ c ], 0 ) ** depth, 0 ), 1 ) );
+
+}
+
+// KHR_materials_specular's dielectric reflectance at normal incidence, F0, when it differs from
+// the plain IOR's: min( F0(ior) specularColor, 1 ) specular. The specular texture isn't sampled.
+function dielectricF0( ext ) {
+
+	const s = ext.KHR_materials_specular;
+	if ( ! s ) return null;
+	const ior = ext.KHR_materials_ior?.ior ?? 1.5;
+	const f = ior >= 1 ? ( ( ior - 1 ) / ( ior + 1 ) ) ** 2 : 0.04;
+	const color = s.specularColorFactor ?? [ 1, 1, 1 ];
+	const f0 = color.map( ( c ) => Math.min( f * Math.max( c, 0 ), 1 ) * ( s.specularFactor ?? 1 ) );
+	return s.specularColorTexture || s.specularTexture || f0.some( ( v ) => Math.abs( v - f ) > 1e-7 ) ? { f0 } : null;
+
+}
+
 function sanitize( name, fallback ) {
 
 	let s = String( name ?? '' ).normalize( 'NFKD' ).replace( /[^A-Za-z0-9_]/g, '_' );
@@ -431,11 +459,37 @@ export class GLTFToUSD {
 		const baseInfo = specGloss ? specGloss.diffuseTexture : pbr.baseColorTexture;
 		const alphaMode = material.alphaMode || 'OPAQUE';
 		const unlit = !! ext.KHR_materials_unlit;
-		const baseTex = baseInfo && await texture( baseInfo, 'baseColorTexture', { scale: baseFactor, colorSpace: 'sRGB' } );
+		const metallic = pbr.metallicFactor ?? 1;
+		const roughness = pbr.roughnessFactor ?? 1;
+
+		// Approximations of extensions UsdPreviewSurface lacks change the diffuse color, so they're
+		// skipped when base color or metallic animation drives the inputs directly. The original
+		// pbrMetallicRoughness is kept for the way back.
+		const pbrAnimated = this.materialPointers( index ).some( ( p ) => p.startsWith( 'pbrMetallicRoughness/' ) );
+		const approximate = ! specGloss && ! unlit && ! pbrAnimated;
+
+		// transmission: UsdPreviewSurface has none, but its transparent opacity keeps specular
+		// reflections. The light glass lets through is tinted by the base color and the volume's
+		// attenuation; its least absorbed channel passes as transparency and the color the blend
+		// needs for the rest goes to the diffuse color. Blended and masked materials keep their alpha.
+		const transmission = ext.KHR_materials_transmission;
+		const t = transmission && alphaMode === 'OPAQUE' && ! unlit ? transmission.transmissionFactor ?? 0 : 0;
+		const glass = approximate ? glassTransmittance( baseFactor, ext.KHR_materials_volume ) : [ 1, 1, 1 ];
+		const clear = Math.min( ...glass ); // fraction of the light behind that passes untinted
+		const opacity = 1 - t * clear;
+		let diffuse = baseFactor.slice( 0, 3 );
+		if ( t > 0 && ! baseInfo && opacity > 0 ) diffuse = diffuse.map( ( c, i ) => ( ( 1 - t ) * c + t * ( glass[ i ] - clear ) ) / opacity );
+
+		// KHR_materials_specular: the specular workflow, where metallic is the same everywhere
+		const specular = approximate && ( ! pbr.metallicRoughnessTexture || metallic === 0 ) && metallic < 1 ? dielectricF0( ext ) : null;
+		if ( specular ) diffuse = diffuse.map( ( c ) => c * ( 1 - metallic ) );
+		const pbrChanged = !! specular || diffuse.some( ( c, i ) => c !== ( baseFactor[ i ] ?? 1 ) );
+
+		const baseTex = baseInfo && await texture( baseInfo, 'baseColorTexture', { scale: [ ...diffuse, baseFactor[ 3 ] ?? 1 ], colorSpace: 'sRGB' } );
 
 		const colorInput = unlit ? 'emissiveColor' : 'diffuseColor';
 		if ( baseTex ) link( colorInput, 'color3f', baseTex, 'rgb' );
-		else set( colorInput, 'color3f', baseFactor.slice( 0, 3 ) );
+		else set( colorInput, 'color3f', diffuse );
 		if ( unlit ) set( 'diffuseColor', 'color3f', [ 0, 0, 0 ] );
 		inputs.baseColorTexture = baseTex;
 
@@ -447,21 +501,31 @@ export class GLTFToUSD {
 
 		}
 
-		// transmission: UsdPreviewSurface has none, but its transparent opacity keeps specular
-		// reflections, so clear glass stays visible as reflections instead of an opaque surface.
-		// Blended and masked materials keep their alpha as opacity.
-		const transmission = ext.KHR_materials_transmission;
+		if ( t > 0 ) {
 
-		if ( transmission && alphaMode === 'OPAQUE' && ! unlit ) {
-
-			const t = transmission.transmissionFactor ?? 0;
-			const tTex = transmission.transmissionTexture && t > 0 && await texture( transmission.transmissionTexture, 'transmissionTexture', { scale: [ - t, - t, - t, 1 ], bias: [ 1, 1, 1, 0 ] } );
+			const s = t * clear;
+			const tTex = transmission.transmissionTexture && s > 0 && await texture( transmission.transmissionTexture, 'transmissionTexture', { scale: [ - s, - s, - s, 1 ], bias: [ 1, 1, 1, 0 ] } );
 			if ( tTex ) link( 'opacity', 'float', tTex, 'r' );
-			else if ( t > 0 ) b.attr( shader, 'inputs:opacity', 'float', 1 - t ); // not in inputs: baseColorFactor animation must not drive it
+			else if ( opacity < 1 ) b.attr( shader, 'inputs:opacity', 'float', opacity ); // not in inputs: baseColorFactor animation must not drive it
 
 		}
 
-		if ( specGloss ) {
+		if ( specular ) {
+
+			// diffuse = base ( 1 - metallic ); specularColor = F0 ( 1 - metallic ) + base metallic
+			set( 'useSpecularWorkflow', 'int', 1 );
+			const f0 = specular.f0.map( ( c ) => c * ( 1 - metallic ) );
+			const base = baseFactor.slice( 0, 3 ).map( ( c ) => c * metallic );
+			const colorInfo = ext.KHR_materials_specular.specularColorTexture;
+			const sTex = colorInfo ? await texture( colorInfo, 'specularColorTexture', { scale: [ ...f0, 1 ], bias: [ ...base, 0 ], colorSpace: 'sRGB' } )
+				: baseInfo && metallic > 0 ? await texture( baseInfo, 'specularColorTexture', { scale: [ ...base, 1 ], bias: [ ...f0, 0 ], colorSpace: 'sRGB' } ) : null;
+			if ( sTex ) link( 'specularColor', 'color3f', sTex, 'rgb' );
+			else set( 'specularColor', 'color3f', f0.map( ( c, i ) => c + base[ i ] ) );
+			const mrTex = pbr.metallicRoughnessTexture && await texture( pbr.metallicRoughnessTexture, 'metallicRoughnessTexture', { scale: [ 1, roughness, 0, 1 ] } );
+			if ( mrTex ) link( 'roughness', 'float', mrTex, 'g' );
+			else set( 'roughness', 'float', roughness );
+
+		} else if ( specGloss ) {
 
 			// specular workflow: UsdPreviewSurface supports it directly
 			set( 'useSpecularWorkflow', 'int', 1 );
@@ -473,8 +537,6 @@ export class GLTFToUSD {
 
 		} else {
 
-			const metallic = pbr.metallicFactor ?? 1;
-			const roughness = pbr.roughnessFactor ?? 1;
 			const mrTex = pbr.metallicRoughnessTexture && await texture( pbr.metallicRoughnessTexture, 'metallicRoughnessTexture', { scale: [ 1, roughness, metallic, 1 ] } );
 			if ( mrTex ) { link( 'roughness', 'float', mrTex, 'g' ); link( 'metallic', 'float', mrTex, 'b' ); }
 			else { set( 'roughness', 'float', roughness ); set( 'metallic', 'float', metallic ); }
@@ -542,6 +604,7 @@ export class GLTFToUSD {
 		if ( ext.KHR_materials_ior ) stash.KHR_materials_ior = ext.KHR_materials_ior;
 		if ( material.extras !== undefined ) stash.extras = material.extras;
 		if ( inputs.originalNormal ) stash.normalTexture = inputs.originalNormal;
+		if ( pbrChanged ) stash.pbrMetallicRoughness = await this.stashTextures( pbr );
 		if ( material.doubleSided ) stash.doubleSided = true;
 		// blending can't be inferred from an opaque opacity
 		if ( alphaMode !== 'OPAQUE' ) { stash.alphaMode = alphaMode; if ( alphaMode === 'MASK' ) stash.alphaCutoff = material.alphaCutoff ?? 0.5; }
@@ -553,6 +616,26 @@ export class GLTFToUSD {
 		}
 
 		return mPath;
+
+	}
+
+	// The paths below a material that KHR_animation_pointer animates, e.g. 'pbrMetallicRoughness/baseColorFactor'.
+	materialPointers( index ) {
+
+		if ( ! this.animatedMaterialPaths ) {
+
+			this.animatedMaterialPaths = new Map();
+
+			for ( const animation of this.json.animations || [] ) for ( const channel of animation.channels || [] ) {
+
+				const m = /^\/materials\/(\d+)\/(.*)$/.exec( channel.target?.extensions?.KHR_animation_pointer?.pointer ?? '' );
+				if ( m ) this.animatedMaterialPaths.set( + m[ 1 ], [ ...( this.animatedMaterialPaths.get( + m[ 1 ] ) || [] ), m[ 2 ] ] );
+
+			}
+
+		}
+
+		return this.animatedMaterialPaths.get( index ) || [];
 
 	}
 

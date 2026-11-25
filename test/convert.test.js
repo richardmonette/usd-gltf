@@ -154,6 +154,73 @@ test( 'transmission becomes opacity in USD, and converts back to the original ma
 
 } );
 
+test( 'volume and specular are approximated in USD, and convert back to the original materials', async () => {
+
+	const b = new GLTFBuilder( 'test' );
+	const json = b.json;
+	const pixels = new Uint8Array( 4 * 4 * 3 ).map( ( _, i ) => ( i * 37 ) & 255 );
+	json.textures.push( { source: b.addImage( encodePNG( { width: 4, height: 4, channels: 3, data: pixels } ), 'image/png', 'rm' ) } );
+	const glass = ( extensions, base ) => ( { pbrMetallicRoughness: { ...( base && { baseColorFactor: base } ), metallicFactor: 0, roughnessFactor: 0 }, extensions: { KHR_materials_transmission: { transmissionFactor: 1 }, ...extensions } } );
+	json.materials.push(
+		{ name: 'amber', ...glass( {}, [ 1, 0.6, 0.2, 1 ] ) },
+		{ name: 'attenuated', ...glass( { KHR_materials_volume: { thicknessFactor: 0.5, attenuationDistance: 1, attenuationColor: [ 0.1, 0.5, 0.9 ] } } ) },
+		{ name: 'thin', ...glass( { KHR_materials_volume: { attenuationDistance: 1, attenuationColor: [ 0.1, 0.5, 0.9 ] } } ) },
+		{ name: 'dim', pbrMetallicRoughness: { baseColorFactor: [ 0.5, 0.5, 0.5, 1 ], metallicFactor: 0 }, extensions: { KHR_materials_specular: { specularFactor: 0.5, specularColorFactor: [ 2, 1, 1 ] } } },
+		{ name: 'half metal', pbrMetallicRoughness: { baseColorFactor: [ 0.5, 0.5, 0.5, 1 ], metallicFactor: 0.5 }, extensions: { KHR_materials_specular: { specularFactor: 0.5 } } },
+		{ name: 'metal texture', pbrMetallicRoughness: { metallicRoughnessTexture: { index: 0 } }, extensions: { KHR_materials_specular: { specularFactor: 0.5 } } },
+		{ name: 'animated', pbrMetallicRoughness: { baseColorFactor: [ 1, 0.6, 0.2, 1 ], metallicFactor: 0 }, extensions: { KHR_materials_transmission: { transmissionFactor: 1 }, KHR_materials_specular: { specularFactor: 0.5 } } },
+	);
+	for ( const e of [ 'KHR_materials_transmission', 'KHR_materials_volume', 'KHR_materials_specular', 'KHR_animation_pointer' ] ) b.useExtension( e );
+	const attributes = { POSITION: b.addAccessor( Float32Array.of( 0, 0, 0, 1, 0, 0, 0, 1, 0 ), 'VEC3', { minmax: true } ), TEXCOORD_0: b.addAccessor( Float32Array.of( 0, 0, 1, 0, 0, 1 ), 'VEC2' ) };
+	json.meshes.push( { primitives: json.materials.map( ( _, material ) => ( { attributes, material } ) ) } );
+	json.nodes.push( { mesh: 0 } );
+	json.scenes.push( { nodes: [ 0 ] } );
+	json.scene = 0;
+	const times = b.addAccessor( Float32Array.of( 0, 1 ), 'SCALAR', { minmax: true } );
+	json.animations = [ { samplers: [ { input: times, output: b.addAccessor( Float32Array.of( 1, 0.6, 0.2, 1, 0.2, 0.6, 1, 1 ), 'VEC4' ) } ], channels: [ { sampler: 0, target: { path: 'pointer', extensions: { KHR_animation_pointer: { pointer: '/materials/6/pbrMetallicRoughness/baseColorFactor' } } } } ] } ];
+	const glb = b.toGLB();
+
+	const usda = new TextDecoder().decode( await glbToUSD( glb, { format: 'usda' } ) );
+	const surface = ( name ) => {
+
+		const m = usda.slice( usda.indexOf( `def Material "${ name }"` ) ).split( /\n {8}def Material / )[ 0 ];
+		const s = m.slice( m.indexOf( 'def Shader "PreviewSurface"' ) );
+		return Object.fromEntries( [ ...s.matchAll( /^\s*\w+ inputs:(\w+) = (.*)$/gm ) ].map( ( [ , k, v ] ) => [ k, v.startsWith( '(' ) ? v.slice( 1, - 1 ).split( ', ' ).map( ( x ) => + ( + x ).toFixed( 4 ) ) : + v ] ) );
+
+	};
+
+	// amber glass: blue passes untinted (0.2), the rest of the blend is orange
+	assert.deepEqual( [ surface( 'amber' ).diffuseColor, surface( 'amber' ).opacity ], [ [ 1, 0.5, 0 ], 0.8 ] );
+	// attenuated over half its distance: sqrt( 0.1, 0.5, 0.9 ), red passes through 0.3162
+	assert.deepEqual( [ surface( 'attenuated' ).opacity.toFixed( 4 ), surface( 'attenuated' ).diffuseColor ], [ '0.6838', [ 0, 0.5717, 0.925 ] ] );
+	assert.deepEqual( [ surface( 'thin' ).opacity, surface( 'thin' ).diffuseColor ], [ 0, [ 1, 1, 1 ] ], 'no thickness: thin walled, no attenuation' );
+	// F0 = min( 0.04 color, 1 ) 0.5
+	assert.deepEqual( surface( 'dim' ), { diffuseColor: [ 0.5, 0.5, 0.5 ], useSpecularWorkflow: 1, specularColor: [ 0.04, 0.02, 0.02 ], roughness: 1 } );
+	// diffuse = base ( 1 - m ), specular = F0 ( 1 - m ) + base m
+	assert.deepEqual( surface( 'half_metal' ), { diffuseColor: [ 0.25, 0.25, 0.25 ], useSpecularWorkflow: 1, specularColor: [ 0.26, 0.26, 0.26 ], roughness: 1 } );
+	assert.equal( surface( 'metal_texture' ).useSpecularWorkflow, undefined, 'metallic varies over the texture' );
+	assert.deepEqual( [ surface( 'animated' ).useSpecularWorkflow, surface( 'animated' ).opacity ], [ undefined, 0 ], 'animated base color drives the inputs directly' );
+
+	const back = await readGLTF( await usdToGLB( await glbToUSD( glb ) ) );
+	const byName = Object.fromEntries( back.json.materials.map( ( m ) => [ m.name, m ] ) );
+	for ( const original of json.materials ) {
+
+		const m = byName[ original.name ];
+		if ( original.pbrMetallicRoughness.metallicRoughnessTexture ) {
+
+			assert.equal( typeof m.pbrMetallicRoughness.metallicRoughnessTexture.index, 'number' );
+			assert.deepEqual( m.extensions, original.extensions );
+
+		} else if ( original.name !== 'animated' ) {
+
+			assert.deepEqual( m, original, original.name );
+
+		}
+
+	}
+
+} );
+
 test( 'GLB -> usda writes readable USD with UsdPreviewSurface and UsdSkel', async () => {
 
 	const usda = new TextDecoder().decode( await glbToUSD( makeGLB(), { format: 'usda' } ) );

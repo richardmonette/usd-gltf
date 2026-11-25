@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Transmissive glass is tinted in USD by its base color and `KHR_materials_volume` attenuation: the least absorbed part of the light passes as transparency, and the rest of the blend becomes the diffuse color. Strongly colored glass looks more opaque as a result. The attenuation is capped at the attenuation color, and the thickness texture isn't sampled.
+- `KHR_materials_specular` becomes UsdPreviewSurface's specular workflow when metallic is the same over the whole material: diffuse = base × (1 − metallic), and the specular color is F0 from the IOR, specular color and specular factor, plus base × metallic. The specular color texture is used; the specular (strength) texture isn't sampled.
+- Materials with animated base color or metallic keep the plain mapping, and converting back to glTF still restores every original material.
+
 ## 0.3.2
 
 - `KHR_materials_transmission` on opaque materials becomes `UsdPreviewSurface` opacity (1 − transmission, from the transmission texture's red channel when there is one), so glass such as the ChronographWatch face renders as clear reflections in USD viewers instead of an opaque surface hiding what is behind it. Converting back still restores the original material.
