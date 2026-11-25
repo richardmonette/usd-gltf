@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.2
 
 - `KHR_materials_transmission` on opaque materials becomes `UsdPreviewSurface` opacity (1 − transmission, from the transmission texture's red channel when there is one), so glass such as the ChronographWatch face renders as clear reflections in USD viewers instead of an opaque surface hiding what is behind it. Converting back still restores the original material.
 
