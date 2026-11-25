@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `KHR_materials_transmission` on opaque materials becomes `UsdPreviewSurface` opacity (1 − transmission, from the transmission texture's red channel when there is one), so glass such as the ChronographWatch face renders as clear reflections in USD viewers instead of an opaque surface hiding what is behind it. Converting back still restores the original material.
+
 ## 0.3.1
 
 - Draco data that doesn't match its accessors rejects with a `DracoMismatchError`. Its `kind` says whether the vertex count, index count, component count, component type, attribute id or a shared accessor disagrees, and its fields give the mesh, primitive, semantic, accessor, and declared and decoded values. ([#4](https://github.com/richardmonette/usd-gltf/issues/4))

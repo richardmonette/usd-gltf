@@ -447,6 +447,20 @@ export class GLTFToUSD {
 
 		}
 
+		// transmission: UsdPreviewSurface has none, but its transparent opacity keeps specular
+		// reflections, so clear glass stays visible as reflections instead of an opaque surface.
+		// Blended and masked materials keep their alpha as opacity.
+		const transmission = ext.KHR_materials_transmission;
+
+		if ( transmission && alphaMode === 'OPAQUE' && ! unlit ) {
+
+			const t = transmission.transmissionFactor ?? 0;
+			const tTex = transmission.transmissionTexture && t > 0 && await texture( transmission.transmissionTexture, 'transmissionTexture', { scale: [ - t, - t, - t, 1 ], bias: [ 1, 1, 1, 0 ] } );
+			if ( tTex ) link( 'opacity', 'float', tTex, 'r' );
+			else if ( t > 0 ) b.attr( shader, 'inputs:opacity', 'float', 1 - t ); // not in inputs: baseColorFactor animation must not drive it
+
+		}
+
 		if ( specGloss ) {
 
 			// specular workflow: UsdPreviewSurface supports it directly

@@ -109,6 +109,51 @@ test( 'GLB -> USDZ -> GLB keeps geometry, skinning, animation and materials', as
 
 } );
 
+test( 'transmission becomes opacity in USD, and converts back to the original material', async () => {
+
+	const b = new GLTFBuilder( 'test' );
+	const json = b.json;
+	const pixels = new Uint8Array( 4 * 4 * 3 ).map( ( _, i ) => ( i * 37 ) & 255 );
+	json.textures.push( { source: b.addImage( encodePNG( { width: 4, height: 4, channels: 3, data: pixels } ), 'image/png', 'mask' ) } );
+	json.materials.push(
+		{ name: 'glass', pbrMetallicRoughness: { metallicFactor: 0, roughnessFactor: 0 }, extensions: { KHR_materials_transmission: { transmissionFactor: 1 } } },
+		{ name: 'frosted', pbrMetallicRoughness: { metallicFactor: 0 }, extensions: { KHR_materials_transmission: { transmissionFactor: 0.8, transmissionTexture: { index: 0 } } } },
+		{ name: 'tinted', alphaMode: 'BLEND', pbrMetallicRoughness: { baseColorFactor: [ 1, 1, 1, 0.5 ], metallicFactor: 0 }, extensions: { KHR_materials_transmission: { transmissionFactor: 1 } } },
+		{ name: 'none', pbrMetallicRoughness: { metallicFactor: 0 }, extensions: { KHR_materials_transmission: { transmissionFactor: 0 } } },
+	);
+	b.useExtension( 'KHR_materials_transmission' );
+	const attributes = { POSITION: b.addAccessor( Float32Array.of( 0, 0, 0, 1, 0, 0, 0, 1, 0 ), 'VEC3', { minmax: true } ), TEXCOORD_0: b.addAccessor( Float32Array.of( 0, 0, 1, 0, 0, 1 ), 'VEC2' ) };
+	json.meshes.push( { primitives: json.materials.map( ( _, material ) => ( { attributes, material } ) ) } );
+	json.nodes.push( { mesh: 0 } );
+	json.scenes.push( { nodes: [ 0 ] } );
+	json.scene = 0;
+	const glb = b.toGLB();
+
+	const usda = new TextDecoder().decode( await glbToUSD( glb, { format: 'usda' } ) );
+	const material = ( name ) => usda.slice( usda.indexOf( `def Material "${ name }"` ) ).split( /\n {8}def Material / )[ 0 ];
+	assert.match( material( 'glass' ), /float inputs:opacity = 0\n/ );
+	assert.match( material( 'frosted' ), /float inputs:opacity.connect = <[^>]*\/transmissionTexture\.outputs:r>/ );
+	assert.match( material( 'frosted' ), /float4 inputs:scale = \(-0\.8, -0\.8, -0\.8, 1\)/ );
+	assert.match( material( 'frosted' ), /float4 inputs:bias = \(1, 1, 1, 0\)/ );
+	assert.match( material( 'tinted' ), /float inputs:opacity = 0\.5\n/, 'blended materials keep their alpha' );
+	assert.doesNotMatch( material( 'none' ), /opacity/ );
+
+	const back = await readGLTF( await usdToGLB( await glbToUSD( glb ) ) );
+	const byName = Object.fromEntries( back.json.materials.map( ( m ) => [ m.name, m ] ) );
+	for ( const name of [ 'glass', 'frosted', 'none' ] ) {
+
+		assert.equal( byName[ name ].alphaMode, undefined, `${ name } stays opaque` );
+		assert.equal( byName[ name ].pbrMetallicRoughness.baseColorFactor, undefined, `${ name } base color alpha unchanged` );
+
+	}
+	assert.deepEqual( byName.glass.extensions.KHR_materials_transmission, { transmissionFactor: 1 } );
+	assert.equal( byName.frosted.extensions.KHR_materials_transmission.transmissionFactor, 0.8 );
+	assert.equal( typeof byName.frosted.extensions.KHR_materials_transmission.transmissionTexture.index, 'number' );
+	assert.equal( byName.frosted.pbrMetallicRoughness.baseColorTexture, undefined, 'the transmission texture is not packed into the base color' );
+	assert.deepEqual( [ byName.tinted.alphaMode, byName.tinted.pbrMetallicRoughness.baseColorFactor ], [ 'BLEND', [ 1, 1, 1, 0.5 ] ] );
+
+} );
+
 test( 'GLB -> usda writes readable USD with UsdPreviewSurface and UsdSkel', async () => {
 
 	const usda = new TextDecoder().decode( await glbToUSD( makeGLB(), { format: 'usda' } ) );

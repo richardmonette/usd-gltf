@@ -707,6 +707,9 @@ export class MaterialConverter {
 
 		}
 
+		// the opacity written for transmission on an opaque material; the stash restores the extension
+		if ( stash?.KHR_materials_transmission && ! stash.alphaMode ) inputs.opacity = constTerms( 1 );
+
 		await this.fill( m, inputs, vertexColors );
 		if ( stash ) await this.restoreStash( m, stash, material );
 		return index;
