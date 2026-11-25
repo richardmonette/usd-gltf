@@ -48,5 +48,19 @@ function fetchKhronos() {
 
 }
 
+// moves an existing shallow clone to the latest sample assets, as CI uses, so new models are tested
+function updateKhronos() {
+
+	const git = ( ...args ) => execFileSync( 'git', args, { cwd: join( root, 'khronos' ), stdio: 'inherit' } );
+	git( 'fetch', '--depth=1', 'origin', 'main' );
+	git( 'reset', '--hard', 'FETCH_HEAD' );
+
+}
+
 if ( ! only || only === 'apple' ) await fetchApple();
-if ( ( ! only || only === 'khronos' ) && ! await exists( join( root, 'khronos', '.git' ) ) ) fetchKhronos();
+if ( ! only || only === 'khronos' ) {
+
+	if ( await exists( join( root, 'khronos', '.git' ) ) ) updateKhronos();
+	else fetchKhronos();
+
+}

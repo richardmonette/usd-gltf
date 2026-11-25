@@ -221,6 +221,26 @@ test( 'volume and specular are approximated in USD, and convert back to the orig
 
 } );
 
+test( 'a base color factor on a mesh with vertex colors converts back', async () => {
+
+	const b = new GLTFBuilder( 'test' );
+	const json = b.json;
+	json.materials.push( { name: 'tinted', pbrMetallicRoughness: { baseColorFactor: [ 0.25, 0.5, 1, 1 ], metallicFactor: 0 } } );
+	json.meshes.push( { primitives: [ { attributes: {
+		POSITION: b.addAccessor( Float32Array.of( 0, 0, 0, 1, 0, 0, 0, 1, 0 ), 'VEC3', { minmax: true } ),
+		COLOR_0: b.addAccessor( Float32Array.of( 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1 ), 'VEC4' ),
+	}, material: 0 } ] } );
+	json.nodes.push( { mesh: 0 } );
+	json.scenes.push( { nodes: [ 0 ] } );
+	json.scene = 0;
+
+	const back = await readGLTF( await usdToGLB( await glbToUSD( b.toGLB() ) ) );
+	const primitive = back.json.meshes[ 0 ].primitives[ 0 ];
+	assert.deepEqual( back.json.materials[ primitive.material ].pbrMetallicRoughness.baseColorFactor, [ 0.25, 0.5, 1, 1 ] );
+	assert.deepEqual( Array.from( back.getFloats( primitive.attributes.COLOR_0 ).array ), [ 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1 ] );
+
+} );
+
 test( 'GLB -> usda writes readable USD with UsdPreviewSurface and UsdSkel', async () => {
 
 	const usda = new TextDecoder().decode( await glbToUSD( makeGLB(), { format: 'usda' } ) );

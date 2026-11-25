@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- USD to glTF kept a mesh's vertex colors but dropped its material's base color factor, so a glTF primitive with `COLOR_0` and a colored base color factor converted back white. glTF multiplies the two, and both are now kept. Found by the new ScatterAnemone sample model.
+- `npm run fetch-corpus` updates an existing Khronos sample assets clone to the latest models, as CI does. Conformance covers 153 Khronos models (324 conversions).
+
 ## 0.3.3
 
 - Transmissive glass is tinted in USD by its base color and `KHR_materials_volume` attenuation: the least absorbed part of the light passes as transparency, and the rest of the blend becomes the diffuse color. Strongly colored glass looks more opaque as a result. The attenuation is capped at the attenuation color, and the thickness texture isn't sampled.

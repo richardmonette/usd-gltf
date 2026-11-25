@@ -682,7 +682,7 @@ export class MaterialConverter {
 	/**
 	 * @returns {Promise<number>} glTF material index
 	 */
-	async convert( material, { doubleSided = false, vertexColors = false, variant = '' } = {} ) {
+	async convert( material, { doubleSided = false, variant = '' } = {} ) {
 
 		this.budget.check();
 		const key = material.path + ( doubleSided ? '|ds' : '' ) + ( variant ? '|' + variant : '' );
@@ -711,7 +711,7 @@ export class MaterialConverter {
 		if ( stash?.pbrMetallicRoughness ) Object.assign( inputs, { diffuseColor: constTerms( [ 1, 1, 1 ] ), opacity: constTerms( 1 ), metallic: constTerms( 0 ), roughness: constTerms( 1 ), specularColor: null } );
 		if ( stash?.KHR_materials_transmission && ! stash.alphaMode ) inputs.opacity = constTerms( 1 );
 
-		await this.fill( m, inputs, vertexColors );
+		await this.fill( m, inputs );
 		if ( stash ) await this.restoreStash( m, stash, material );
 		return index;
 
@@ -798,7 +798,7 @@ export class MaterialConverter {
 
 	}
 
-	async fill( m, inputs, vertexColors ) {
+	async fill( m, inputs ) {
 
 		const pbr = {};
 		const diffuse = broadcast( inputs.diffuseColor, 3 );
@@ -833,7 +833,10 @@ export class MaterialConverter {
 			if ( ! opacityUsed ) f[ 3 ] = 1;
 			if ( f.some( ( v ) => v !== 1 ) ) pbr.baseColorFactor = f;
 
-		} else if ( diffuse.some( ( t ) => t.primvar ) || vertexColors ) {
+		} else if ( diffuse.some( ( t ) => t.primvar ) ) {
+
+			// the vertex colors are the color; a constant diffuse on a mesh with vertex colors is the
+			// base color factor, which glTF multiplies by them
 
 			pbr.baseColorFactor = [ 1, 1, 1, clamp01( opacity.bias ) ];
 			if ( pbr.baseColorFactor[ 3 ] === 1 ) delete pbr.baseColorFactor;

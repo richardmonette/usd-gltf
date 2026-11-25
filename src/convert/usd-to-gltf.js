@@ -295,7 +295,7 @@ export class USDToGLTF {
 			const primitive = { attributes: { ...attributes }, indices: this.builder.addAccessor( indices, 'SCALAR', { target: 34963 } ) };
 			const material = ( group.subset && ( this.defaultMaterial( group.subset ) || this.boundMaterial( group.subset ) ) ) || this.defaultMaterial( prim ) || this.boundMaterial( prim );
 
-			if ( material ) primitive.material = await this.materials.convert( material, { doubleSided, vertexColors } );
+			if ( material ) primitive.material = await this.materials.convert( material, { doubleSided } );
 			else primitive.material = this.materials.defaultMaterial( data.constantColor, data.constantOpacity, vertexColors, doubleSided );
 
 			if ( targets ) primitive.targets = targets.accessors;
@@ -311,7 +311,7 @@ export class USDToGLTF {
 		}
 
 		node.mesh = this.json.meshes.push( mesh ) - 1;
-		this.meshNodes.push( { prim, node: nodeIndex, mesh: node.mesh, groups: data.groups, doubleSided, vertexColors, blendShapes: targets?.names, skeleton: skel?.skeleton } );
+		this.meshNodes.push( { prim, node: nodeIndex, mesh: node.mesh, groups: data.groups, doubleSided, blendShapes: targets?.names, skeleton: skel?.skeleton } );
 
 	}
 
@@ -1103,7 +1103,7 @@ export class USDToGLTF {
 
 						this.materials.stage = stage;
 						const before = this.json.materials.length;
-						let index = await this.materials.convert( material, { doubleSided: entry.doubleSided, vertexColors: entry.vertexColors, variant: isDefault ? '' : `${ set.path }{${ set.name }=${ variant }}` } );
+						let index = await this.materials.convert( material, { doubleSided: entry.doubleSided, variant: isDefault ? '' : `${ set.path }{${ set.name }=${ variant }}` } );
 						index = this.dedupeMaterial( index, before );
 						this.materials.stage = baseStage;
 
