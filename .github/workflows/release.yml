@@ -1,0 +1,25 @@
+name: Release
+
+# Publishes to npm when a GitHub release is published, with npm trusted publishing: npm verifies
+# this workflow and hands it a short lived token, so the repo holds no npm token.
+
+on:
+  release:
+    types: [ published ]
+
+permissions:
+  contents: read
+  id-token: write # lets npm verify this workflow
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # its npm 11 supports trusted publishing
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm test
+      - run: npm publish --access public
