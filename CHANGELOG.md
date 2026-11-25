@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.4
 
 - USD to glTF kept a mesh's vertex colors but dropped its material's base color factor, so a glTF primitive with `COLOR_0` and a colored base color factor converted back white. glTF multiplies the two, and both are now kept. Found by the new ScatterAnemone sample model.
 - `npm run fetch-corpus` updates an existing Khronos sample assets clone to the latest models, as CI does. Conformance covers 153 Khronos models (324 conversions).
